@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AI Testing Tool</title>
+
+  <style>
+    body {
+      font-family: Arial;
+      margin: 20px;
+    }
+
+    textarea {
+      width: 500px;
+      padding: 10px;
+    }
+
+    button {
+      padding: 8px 12px;
+      margin-top: 10px;
+      cursor: pointer;
+    }
+
+    table {
+      border-collapse: collapse;
+      margin-top: 15px;
+      width: 90%;
+    }
+
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #f2f2f2;
+    }
+  </style>
+</head>
+
+<body>
+
+<h2>Test Case Generator</h2>
+
+<textarea id="requirement" rows="4" placeholder="Enter requirement"></textarea><br>
+<button onclick="generateTestCases()">Generate Test Cases</button>
+<button onclick="downloadCSV()">Download CSV</button>
+
+<div id="testcaseOutput"></div>
+
+<hr>
+
+<h2>Error Analysis</h2>
+
+<textarea id="errorLog" rows="4" placeholder="Paste error log"></textarea><br>
+<button onclick="analyzeError()">Analyze Error</button>
+
+<pre id="analysisOutput"></pre>
+
+<script>
+
+// 🔹 Convert AI text table → HTML table
+function formatTable(text) {
+  const rows = text.split("\n").filter(r => r.includes("|"));
+
+  let html = "<table>";
+  
+  rows.forEach((row, index) => {
+    const cols = row.split("|").filter(c => c.trim() !== "");
+    
+    html += "<tr>";
+    cols.forEach(col => {
+      if (index === 0) {
+        html += `<th>${col.trim()}</th>`;
+      } else {
+        html += `<td>${col.trim()}</td>`;
+      }
+    });
+    html += "</tr>";
+  });
+
+  html += "</table>";
+  return html;
+}
+
+// 🔹 Generate Test Cases
+async function generateTestCases() {
+  const requirement = document.getElementById("requirement").value;
+
+  const res = await fetch("http://localhost:5000/generate-testcases", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ requirement }),
+  });
+
+  const data = await res.json();
+
+  if (data.result) {
+    document.getElementById("testcaseOutput").innerHTML = formatTable(data.result);
+  } else {
+    document.getElementById("testcaseOutput").innerText = "Error: " + JSON.stringify(data);
+  }
+}
+
+// 🔹 Analyze Error
+async function analyzeError() {
+  const errorLog = document.getElementById("errorLog").value;
+
+  const res = await fetch("http://localhost:5000/analyze-error", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ errorLog }),
+  });
+
+  const data = await res.json();
+
+  if (data.result) {
+    document.getElementById("analysisOutput").innerText = data.result;
+  } else {
+    document.getElementById("analysisOutput").innerText = "Error: " + JSON.stringify(data);
+  }
+}
+
+// 🔹 Download CSV
+function downloadCSV() {
+  const text = document.getElementById("testcaseOutput").innerText;
+
+  if (!text) {
+    alert("No data to download!");
+    return;
+  }
+
+  const blob = new Blob([text], { type: "text/csv" });
+  const url = window.URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "testcases.csv";
+  a.click();
+}
+
+</script>
+
+</body>
+</html>
