@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import BoltIcon from "@mui/icons-material/Bolt";
 import CleaningServicesIcon from "@mui/icons-material/CleaningServices";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
@@ -7,7 +7,6 @@ import SmartToyIcon from "@mui/icons-material/SmartToy";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import ChatIcon from "@mui/icons-material/Chat";
 import AssessmentIcon from "@mui/icons-material/Assessment";
-import Skeleton from "@mui/material/Skeleton";
 import CloseIcon from "@mui/icons-material/Close";
 import MuiTooltip from "@mui/material/Tooltip";
 import axios from "axios";
@@ -28,6 +27,11 @@ import HealingIcon from "@mui/icons-material/Healing";
 import DeleteIcon from "@mui/icons-material/Delete";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import VisibilityIcon from "@mui/icons-material/Visibility";
+import SendIcon from "@mui/icons-material/Send";
+import ImageIcon from "@mui/icons-material/Image";
+import TextFieldsIcon from "@mui/icons-material/TextFields";
+import CameraAltIcon from "@mui/icons-material/CameraAlt";
+import io from "socket.io-client";
 
 import {
   TextField,
@@ -38,12 +42,14 @@ import {
   Box,
   Select,
   MenuItem,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
   Chip,
   FormControlLabel,
   Switch,
+  Divider,
+  Paper,
+  CircularProgress,
+  ToggleButton,
+  ToggleButtonGroup,
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
@@ -65,8 +71,8 @@ function App() {
   // -------- Test Generator state --------
   const [requirement, setRequirement] = useState("");
   const [testcases, setTestcases] = useState([]);
-  const [originalTestcases, setOriginalTestcases] = useState([]); // for "Reset to original"
-  const [editedIds, setEditedIds] = useState(new Set()); // which TCs have been edited
+  const [originalTestcases, setOriginalTestcases] = useState([]);
+  const [editedIds, setEditedIds] = useState(new Set());
   const [priorityFilter, setPriorityFilter] = useState("All");
   const [loading, setLoading] = useState(false);
 
@@ -115,12 +121,106 @@ function App() {
   const [historyFilterSuite, setHistoryFilterSuite] = useState("");
 
   // -------- Editing state --------
-  // editingCell: { tcId, field, stepIdx? } | null
   const [editingCell, setEditingCell] = useState(null);
   const [editValue, setEditValue] = useState("");
 
   // -------- Heal info dialog state --------
   const [healInfoDialog, setHealInfoDialog] = useState(null);
+
+  // ======== NEW: Screenshot-to-Tests state ========
+  const [inputMode, setInputMode] = useState("text"); // "text" or "screenshot"
+  const [screenshotFile, setScreenshotFile] = useState(null);
+  const [screenshotPreview, setScreenshotPreview] = useState(null);
+
+  // ======== NEW: Conversational Refinement state ========
+  const [refinementOpen, setRefinementOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [refining, setRefining] = useState(false);
+
+  // ======== NEW: Bug Report state ========
+  const [bugReportOpen, setBugReportOpen] = useState(false);
+  const [selectedFailure, setSelectedFailure] = useState(null);
+  const [generatedBugReport, setGeneratedBugReport] = useState("");
+  const [generatingBugReport, setGeneratingBugReport] = useState(false);
+
+  // ======== NEW: Live Execution Streaming state ========
+  const [socket, setSocket] = useState(null);
+  const [liveProgress, setLiveProgress] = useState(null);
+  const [currentTest, setCurrentTest] = useState(null);
+  const [currentStep, setCurrentStep] = useState("");
+
+  // ===========================================================
+  // WEBSOCKET CONNECTION
+  // ===========================================================
+  useEffect(() => {
+    const socketInstance = io(API, {
+      transports: ["websocket", "polling"],
+      reconnection: true,
+    });
+
+    socketInstance.on("connect", () => {
+      console.log("✅ WebSocket connected:", socketInstance.id);
+    });
+
+    socketInstance.on("disconnect", () => {
+      console.log("❌ WebSocket disconnected");
+    });
+
+    // Listen to execution events
+    socketInstance.on("run:start", (data) => {
+      console.log("📡 Run started:", data);
+      setLiveProgress({ completed: 0, total: data.total });
+      setCurrentTest(null);
+      setCurrentStep("");
+    });
+
+    socketInstance.on("tc:start", (data) => {
+      console.log("📡 Test started:", data);
+      setCurrentTest(data);
+      setCurrentStep("Starting test case...");
+    });
+
+    socketInstance.on("step:executing", (data) => {
+      console.log("📡 Step executing:", data);
+      setCurrentStep(data.step);
+    });
+
+    socketInstance.on("tc:done", (data) => {
+      console.log("📡 Test completed:", data);
+      setLiveProgress((prev) => prev ? { ...prev, completed: prev.completed + 1 } : null);
+      
+      // Update results in real-time
+      setExecutionResults((prev) => {
+        const existing = prev.find((r) => r.testCaseId === data.testCaseId);
+        if (existing) {
+          return prev.map((r) => r.testCaseId === data.testCaseId ? data : r);
+        } else {
+          return [...prev, data];
+        }
+      });
+    });
+
+    socketInstance.on("run:complete", (data) => {
+      console.log("📡 Run completed:", data);
+      setLiveProgress(null);
+      setCurrentTest(null);
+      setCurrentStep("");
+    });
+
+    socketInstance.on("run:error", (data) => {
+      console.error("📡 Run error:", data);
+      setLiveProgress(null);
+      setCurrentTest(null);
+      setCurrentStep("");
+    });
+
+    setSocket(socketInstance);
+
+    return () => {
+      socketInstance.disconnect();
+    };
+  }, []);
 
   // ===========================================================
   // SUITE / HISTORY API HELPERS
@@ -146,7 +246,6 @@ function App() {
     }
   }, []);
 
-  // Initial load of suites/executions when Suites tab opens
   useEffect(() => {
     if (activeTab === "suites") {
       refreshSuites();
@@ -155,21 +254,36 @@ function App() {
   }, [activeTab, historyFilterSuite, refreshSuites, refreshExecutions]);
 
   // ===========================================================
-  // GENERATE TEST CASES
+  // GENERATE TEST CASES (Text or Screenshot)
   // ===========================================================
   const generateTestCases = async () => {
     setLoading(true);
     try {
       let parsedTestData = {};
-      try { parsedTestData = JSON.parse(testDataJson); } catch { /* empty */ }
+      try { parsedTestData = JSON.parse(testDataJson); } catch { }
 
-      const res = await fetch(`${API}/generate-testcases`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requirement, appUrl, testData: parsedTestData }),
-      });
+      let res;
+      
+      if (inputMode === "screenshot" && screenshotFile) {
+        // Screenshot mode
+        const formData = new FormData();
+        formData.append("screenshot", screenshotFile);
+        formData.append("appUrl", appUrl);
+        formData.append("testData", JSON.stringify(parsedTestData));
 
-      const data = await res.json();
+        res = await axios.post(`${API}/generate-from-screenshot`, formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      } else {
+        // Text mode
+        res = await fetch(`${API}/generate-testcases`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ requirement, appUrl, testData: parsedTestData }),
+        });
+      }
+
+      const data = inputMode === "screenshot" ? res.data : await res.json();
       let result = data.result;
 
       let tcs = [];
@@ -183,7 +297,7 @@ function App() {
       }
 
       setTestcases(tcs);
-      setOriginalTestcases(JSON.parse(JSON.stringify(tcs))); // deep clone for reset
+      setOriginalTestcases(JSON.parse(JSON.stringify(tcs)));
       setEditedIds(new Set());
       setCurrentSuiteId(null);
       setCurrentSuiteName(null);
@@ -196,7 +310,30 @@ function App() {
   };
 
   // ===========================================================
-  // FILE UPLOAD
+  // SCREENSHOT UPLOAD HANDLING
+  // ===========================================================
+  const handleScreenshotChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      alert("Please upload an image file");
+      return;
+    }
+
+    setScreenshotFile(file);
+    const reader = new FileReader();
+    reader.onload = (e) => setScreenshotPreview(e.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  const removeScreenshot = () => {
+    setScreenshotFile(null);
+    setScreenshotPreview(null);
+  };
+
+  // ===========================================================
+  // FILE UPLOAD (Requirements doc)
   // ===========================================================
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
@@ -236,6 +373,122 @@ function App() {
   };
 
   // ===========================================================
+  // CONVERSATIONAL REFINEMENT
+  // ===========================================================
+  const sendChatMessage = async () => {
+    if (!chatInput.trim()) return;
+    
+    const userMsg = chatInput.trim();
+    setChatMessages((prev) => [...prev, { role: "user", text: userMsg }]);
+    setChatInput("");
+    setRefining(true);
+
+    try {
+      // Extract test case ID from message (e.g., "TC_005")
+      const tcMatch = userMsg.match(/TC_\d+/i);
+      if (!tcMatch) {
+        setChatMessages((prev) => [...prev, {
+          role: "assistant",
+          text: "Please mention a test case ID (e.g., TC_005) so I know which test to refine."
+        }]);
+        setRefining(false);
+        return;
+      }
+
+      const tcId = tcMatch[0].toUpperCase();
+      const testCase = testcases.find((tc) => tc.testCaseId === tcId);
+      
+      if (!testCase) {
+        setChatMessages((prev) => [...prev, {
+          role: "assistant",
+          text: `Test case ${tcId} not found. Available test cases: ${testcases.map(t => t.testCaseId).join(", ")}`
+        }]);
+        setRefining(false);
+        return;
+      }
+
+      const res = await fetch(`${API}/refine-testcase`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ testCase, userMessage: userMsg }),
+      });
+
+      const data = await res.json();
+      
+      if (data.updatedTestCase) {
+        // Update test case in state
+        setTestcases((prev) =>
+          prev.map((tc) => tc.testCaseId === tcId ? data.updatedTestCase : tc)
+        );
+        setEditedIds((prev) => new Set(prev).add(tcId));
+        
+        setChatMessages((prev) => [...prev, {
+          role: "assistant",
+          text: `✅ Updated ${tcId}! Check the test cases table to see the changes.`
+        }]);
+      } else {
+        setChatMessages((prev) => [...prev, {
+          role: "assistant",
+          text: "Sorry, I couldn't update the test case. Please try rephrasing your request."
+        }]);
+      }
+    } catch (err) {
+      console.error(err);
+      setChatMessages((prev) => [...prev, {
+        role: "assistant",
+        text: "Error: " + err.message
+      }]);
+    }
+
+    setRefining(false);
+  };
+
+  // ===========================================================
+  // BUG REPORT GENERATION
+  // ===========================================================
+  const openBugReportModal = (result) => {
+    setSelectedFailure(result);
+    setBugReportOpen(true);
+    generateBugReport(result);
+  };
+
+  const generateBugReport = async (result) => {
+    setGeneratingBugReport(true);
+    try {
+      const testCase = testcases.find((tc) => tc.testCaseId === result.testCaseId);
+      
+      const res = await fetch(`${API}/generate-bug-report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          testCase,
+          failureReason: result.error,
+          screenshot: result.screenshot,
+          stepLog: result.stepLog || [],
+          environment: {
+            browser: "Chrome",
+            os: navigator.platform,
+            appUrl,
+            timestamp: new Date().toISOString(),
+          },
+        }),
+      });
+
+      const data = await res.json();
+      setGeneratedBugReport(data.bugReport || "Error generating report");
+    } catch (err) {
+      console.error(err);
+      setGeneratedBugReport("Error: " + err.message);
+    }
+    setGeneratingBugReport(false);
+  };
+
+  const copyBugReport = () => {
+    navigator.clipboard.writeText(generatedBugReport);
+    alert("Bug report copied to clipboard!");
+  };
+
+  // ===========================================================
   // CLEAR / COPY / EXPORT
   // ===========================================================
   const clearAll = () => {
@@ -250,6 +503,8 @@ function App() {
     setExecutionResults([]);
     setCurrentSuiteId(null);
     setCurrentSuiteName(null);
+    setScreenshotFile(null);
+    setScreenshotPreview(null);
   };
 
   const copyToClipboard = () => {
@@ -333,6 +588,11 @@ function App() {
     setStopping(false);
     setExecutionResults([]);
 
+    // Register this run with WebSocket
+    if (socket) {
+      socket.emit("register_run", runId);
+    }
+
     try {
       const res = await fetch(`${API}/execute-tests`, {
         method: "POST",
@@ -397,7 +657,6 @@ function App() {
         const updated = { ...tc };
 
         if (field === "testSteps" && typeof stepIdx === "number") {
-          // Edit one step OR all steps from a textarea (split by newlines)
           if (editValue.includes("\n")) {
             updated.testSteps = editValue.split("\n").filter((s) => s.trim());
           } else {
@@ -444,10 +703,8 @@ function App() {
     if (!suiteName.trim()) { alert("Suite name is required"); return; }
     try {
       let parsedTestData = {};
-      try { parsedTestData = JSON.parse(testDataJson); } catch { /* empty */ }
+      try { parsedTestData = JSON.parse(testDataJson); } catch { }
 
-      // If we already have a currentSuiteId AND user kept the same name, UPDATE
-      // Otherwise, CREATE a new one. We treat name change as "save as new".
       const isUpdate = currentSuiteId && currentSuiteName === suiteName.trim();
       const url = isUpdate ? `${API}/suites/${currentSuiteId}` : `${API}/suites`;
       const method = isUpdate ? "PUT" : "POST";
@@ -575,7 +832,6 @@ function App() {
     return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
   };
 
-  // -------- Reusable Section Header (collapsible) --------
   const SectionHeader = ({ title, count, isOpen, onToggle, extra }) => (
     <Box
       onClick={onToggle}
@@ -610,7 +866,6 @@ function App() {
     </Box>
   );
 
-  // -------- Editable cell component --------
   const EditableCell = ({ tcId, field, value, multiline = false, stepIdx }) => {
     const isEditing = editingCell &&
       editingCell.tcId === tcId &&
@@ -685,333 +940,537 @@ function App() {
       </Box>
 
       {/* MAIN */}
-      <Box sx={{ flex: 1, p: 3, overflow: "auto" }}>
+      <Box sx={{ flex: 1, p: 3, overflow: "auto", position: "relative" }}>
+        {/* LIVE PROGRESS OVERLAY */}
+        {liveProgress && (
+          <Paper
+            sx={{
+              position: "fixed",
+              top: 80,
+              right: 20,
+              zIndex: 1000,
+              p: 2,
+              width: 350,
+              background: "rgba(255,255,255,0.95)",
+              backdropFilter: "blur(10px)",
+              borderRadius: "12px",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+            }}
+          >
+            <Typography variant="h6" sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+              ⚡ Live Execution Progress
+            </Typography>
+            <Typography variant="body2" color="text.secondary" mb={1}>
+              Completed: {liveProgress.completed} / {liveProgress.total}
+            </Typography>
+            <LinearProgress
+              variant="determinate"
+              value={(liveProgress.completed / liveProgress.total) * 100}
+              sx={{ mb: 2, height: 8, borderRadius: 5 }}
+            />
+            {currentTest && (
+              <>
+                <Typography variant="body2" fontWeight={600} color="primary">
+                  Current: {currentTest.testCaseId}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {currentTest.title}
+                </Typography>
+              </>
+            )}
+            {currentStep && (
+              <Typography variant="caption" display="block" mt={1} sx={{ fontStyle: "italic", color: "text.secondary" }}>
+                Step: {currentStep}
+              </Typography>
+            )}
+          </Paper>
+        )}
+
         {/* ============ TEST GENERATOR ============ */}
         {activeTab === "test" && (
-          <Card sx={glassCard}>
-            <CardContent>
-              <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 1 }}>
-                <Typography variant="h6" color="white">Test Case Generator</Typography>
-                {currentSuiteName && (
-                  <Chip
-                    icon={<FolderIcon sx={{ color: "white !important" }} />}
-                    label={`Suite: ${currentSuiteName}`}
-                    sx={{ background: "rgba(66,165,245,0.4)", color: "white", fontWeight: 600 }}
-                  />
-                )}
-              </Box>
-
-              <Box mt={2}>
-                <TextField
-                  fullWidth label="Application URL" placeholder="https://example.com"
-                  value={appUrl} onChange={(e) => setAppUrl(e.target.value)} sx={inputSx}
-                />
-              </Box>
-
-              <TextField
-                fullWidth multiline rows={3}
-                value={requirement} onChange={(e) => setRequirement(e.target.value)}
-                placeholder="Paste requirement / user story / acceptance criteria here..."
-                sx={{ mt: 2, ...inputSx }}
-              />
-
-              {/* TEST DATA */}
-              <Accordion sx={{ mt: 2, background: "rgba(255,255,255,0.08)", color: "white", borderRadius: "12px !important", "&:before": { display: "none" } }}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: "white" }} />}>
-                  <Typography>🔑 Test Data (credentials, sample inputs) — JSON format</Typography>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <Typography fontSize={12} color="rgba(255,255,255,0.7)" mb={1}>
-                    Provide credentials and sample data so the AI can generate executable tests.
-                  </Typography>
-                  <TextField fullWidth multiline rows={4} value={testDataJson} onChange={(e) => setTestDataJson(e.target.value)} sx={inputSx} />
-                </AccordionDetails>
-              </Accordion>
-
-              {/* File upload */}
-              <Box mt={2} sx={{ display: "flex", my: 2, alignItems: "center", gap: 2, padding: "12px 16px", borderRadius: "12px", background: "rgba(255,255,255,0.1)", border: "1px dashed rgba(255,255,255,0.4)", boxShadow: "0 4px 12px rgba(0,0,0,0.2)" }}>
-                <Typography color="rgba(255,255,255,0.8)" fontSize={14}>📎 Upload a requirement file:</Typography>
-                <Button variant="outlined" component="label" disabled={fileUploading}
-                  sx={{ borderRadius: "20px", color: "white", borderColor: "rgba(255,255,255,0.5)", textTransform: "none", fontSize: "13px", "&:hover": { borderColor: "white", background: "rgba(255,255,255,0.1)" } }}>
-                  {fileUploading ? "Reading file..." : "Choose File"}
-                  <input type="file" hidden accept=".pdf,.docx" onChange={handleFileUpload} />
-                </Button>
-                {uploadedFileName !== "" && (
-                  <Box sx={{ display: "flex", alignItems: "center", gap: 1, background: "rgba(255,255,255,0.15)", padding: "4px 10px", borderRadius: "10px" }}>
-                    <Typography color="white" fontSize={13} sx={{ maxWidth: "150px", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      ✅ {uploadedFileName}
-                    </Typography>
-                    <MuiTooltip title="Remove file"><CloseIcon onClick={removeUploadedFile} sx={{ fontSize: 16, cursor: "pointer", "&:hover": { color: "#ff5252" } }} /></MuiTooltip>
+          <Box sx={{ display: "flex", gap: 2 }}>
+            {/* MAIN CONTENT */}
+            <Box sx={{ flex: refinementOpen ? 0.7 : 1, transition: "all 0.3s ease" }}>
+              <Card sx={glassCard}>
+                <CardContent>
+                  <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 1 }}>
+                    <Typography variant="h6" color="white">Test Case Generator</Typography>
+                    {currentSuiteName && (
+                      <Chip
+                        icon={<FolderIcon sx={{ color: "white !important" }} />}
+                        label={`Suite: ${currentSuiteName}`}
+                        sx={{ background: "rgba(66,165,245,0.4)", color: "white", fontWeight: 600 }}
+                      />
+                    )}
+                    {testcases.length > 0 && (
+                      <Button
+                        startIcon={<ChatIcon />}
+                        onClick={() => setRefinementOpen(!refinementOpen)}
+                        sx={{
+                          background: refinementOpen ? "rgba(156,39,176,0.4)" : "rgba(255,255,255,0.2)",
+                          color: "white",
+                          borderRadius: "20px",
+                          textTransform: "none",
+                          "&:hover": { background: "rgba(156,39,176,0.6)" },
+                        }}
+                      >
+                        {refinementOpen ? "Close Chat" : "Refine with AI"}
+                      </Button>
+                    )}
                   </Box>
-                )}
-              </Box>
 
-              {fileUploading && (
-                <Box mt={1}>
-                  <LinearProgress variant="determinate" value={uploadProgress} sx={{ height: 8, borderRadius: 5, background: "rgba(255,255,255,0.2)", "& .MuiLinearProgress-bar": { background: "linear-gradient(90deg, #42a5f5, #66bb6a)" } }} />
-                  <Typography fontSize={12} color="white" mt={0.5}>Uploading... {uploadProgress}%</Typography>
-                </Box>
-              )}
-
-              <Box mt={2} display="flex" gap={2} flexWrap="wrap" alignItems="center">
-                <Button variant="contained" startIcon={<BoltIcon />} onClick={generateTestCases} sx={primaryBtn} disabled={loading}>
-                  {loading ? "Generating..." : "Generate"}
-                </Button>
-                <Button variant="contained" startIcon={<CleaningServicesIcon />} onClick={clearAll} sx={secondaryBtn}>Clear</Button>
-
-                {testcases.length > 0 && (
-                  <Button variant="contained" startIcon={<ContentCopyIcon />} onClick={copyToClipboard} sx={secondaryBtn}>Copy</Button>
-                )}
-                {testcases.length > 0 && (
-                  <Button variant="contained" startIcon={<AssessmentIcon />} onClick={exportToCSV} sx={successBtn}>Export CSV</Button>
-                )}
-                {testcases.length > 0 && (
-                  <Button variant="contained" startIcon={<SaveIcon />} onClick={openSaveDialog}
-                    sx={{ borderRadius: "25px", background: "linear-gradient(45deg, #00897b, #26a69a)", textTransform: "none", color: "white", fontWeight: "bold", "&:hover": { transform: "translateY(-2px)" } }}>
-                    {currentSuiteId ? "Save / Update Suite" : "Save as Suite"}
-                  </Button>
-                )}
-                {testcases.length > 0 && (
-                  <Button variant="contained" onClick={executeTestCases} disabled={executing}
-                    sx={{ background: "#ff9800", "&:hover": { background: "#fb8c00" }, borderRadius: "20px", textTransform: "none" }}>
-                    {executing ? "Running..." : "Run Test Cases"}
-                  </Button>
-                )}
-                {executing && (
-                  <Button variant="contained" startIcon={<StopCircleIcon />} onClick={stopExecution} disabled={stopping}
-                    sx={{
-                      background: "linear-gradient(45deg, #e53935, #ff5252)",
-                      "&:hover": { background: "linear-gradient(45deg, #c62828, #e53935)", transform: "translateY(-2px)" },
-                      borderRadius: "20px", textTransform: "none", fontWeight: "bold", color: "white",
-                      boxShadow: "0 4px 15px rgba(229,57,53,0.4)",
-                    }}>
-                    {stopping ? "Stopping..." : "Stop Execution"}
-                  </Button>
-                )}
-
-                {testcases.length > 0 && (
-                  <Box sx={{ display: "flex", alignItems: "center", gap: 2, color: "white", flexWrap: "wrap" }}>
-                    <FormControlLabel
-                      control={<Switch checked={selfHealEnabled} onChange={(e) => setSelfHealEnabled(e.target.checked)} />}
-                      label={<span style={{ fontSize: 13, color: "white" }}>🩹 Self-heal</span>}
-                    />
-                    <FormControlLabel
-                      control={<Switch checked={headlessMode} onChange={(e) => setHeadlessMode(e.target.checked)} />}
-                      label={<span style={{ fontSize: 13, color: "white" }}>Headless</span>}
+                  <Box mt={2}>
+                    <TextField
+                      fullWidth label="Application URL" placeholder="https://example.com"
+                      value={appUrl} onChange={(e) => setAppUrl(e.target.value)} sx={inputSx}
                     />
                   </Box>
-                )}
-              </Box>
 
-              {/* SCREENSHOT LIGHTBOX */}
-              <Dialog
-                open={Boolean(selectedImage)} onClose={() => setSelectedImage(null)} maxWidth={false}
-                PaperProps={{ sx: { background: "transparent", boxShadow: "none", overflow: "visible", margin: 2 } }}
-                BackdropProps={{ sx: { backgroundColor: "rgba(0,0,0,0.85)" } }}
+                  {/* INPUT MODE TOGGLE */}
+                  <Box mt={2} sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+                    <Typography color="white" fontSize={14}>Input Mode:</Typography>
+                    <ToggleButtonGroup
+                      value={inputMode}
+                      exclusive
+                      onChange={(e, newMode) => newMode && setInputMode(newMode)}
+                      size="small"
+                    >
+                      <ToggleButton value="text" sx={{ color: "white", "&.Mui-selected": { background: "rgba(66,165,245,0.5)", color: "white" } }}>
+                        <TextFieldsIcon sx={{ mr: 0.5 }} fontSize="small" />
+                        Text Requirement
+                      </ToggleButton>
+                      <ToggleButton value="screenshot" sx={{ color: "white", "&.Mui-selected": { background: "rgba(156,39,176,0.5)", color: "white" } }}>
+                        <CameraAltIcon sx={{ mr: 0.5 }} fontSize="small" />
+                        Screenshot
+                      </ToggleButton>
+                    </ToggleButtonGroup>
+                  </Box>
+
+                  {/* TEXT MODE */}
+                  {inputMode === "text" && (
+                    <>
+                      <TextField
+                        fullWidth multiline rows={3}
+                        value={requirement} onChange={(e) => setRequirement(e.target.value)}
+                        placeholder="Paste requirement / user story / acceptance criteria here..."
+                        sx={{ mt: 2, ...inputSx }}
+                      />
+
+                      {/* File upload */}
+                      <Box mt={2} sx={{ display: "flex", my: 2, alignItems: "center", gap: 2, padding: "12px 16px", borderRadius: "12px", background: "rgba(255,255,255,0.1)", border: "1px dashed rgba(255,255,255,0.4)" }}>
+                        <Typography color="rgba(255,255,255,0.8)" fontSize={14}>📎 Upload requirement file:</Typography>
+                        <Button variant="outlined" component="label" disabled={fileUploading}
+                          sx={{ borderRadius: "20px", color: "white", borderColor: "rgba(255,255,255,0.5)", textTransform: "none", fontSize: "13px", "&:hover": { borderColor: "white", background: "rgba(255,255,255,0.1)" } }}>
+                          {fileUploading ? "Reading file..." : "Choose File"}
+                          <input type="file" hidden accept=".pdf,.docx" onChange={handleFileUpload} />
+                        </Button>
+                        {uploadedFileName && (
+                          <Box sx={{ display: "flex", alignItems: "center", gap: 1, background: "rgba(255,255,255,0.15)", padding: "4px 10px", borderRadius: "10px" }}>
+                            <Typography color="white" fontSize={13} sx={{ maxWidth: "150px", overflow: "hidden", textOverflow: "ellipsis" }}>
+                              ✅ {uploadedFileName}
+                            </Typography>
+                            <MuiTooltip title="Remove file"><CloseIcon onClick={removeUploadedFile} sx={{ fontSize: 16, cursor: "pointer", "&:hover": { color: "#ff5252" } }} /></MuiTooltip>
+                          </Box>
+                        )}
+                      </Box>
+
+                      {fileUploading && (
+                        <Box mt={1}>
+                          <LinearProgress variant="determinate" value={uploadProgress} sx={{ height: 8, borderRadius: 5, background: "rgba(255,255,255,0.2)", "& .MuiLinearProgress-bar": { background: "linear-gradient(90deg, #42a5f5, #66bb6a)" } }} />
+                          <Typography fontSize={12} color="white" mt={0.5}>Uploading... {uploadProgress}%</Typography>
+                        </Box>
+                      )}
+                    </>
+                  )}
+
+                  {/* SCREENSHOT MODE */}
+                  {inputMode === "screenshot" && (
+                    <Box mt={2}>
+                      {!screenshotPreview ? (
+                        <Box
+                          sx={{
+                            border: "2px dashed rgba(255,255,255,0.4)",
+                            borderRadius: "12px",
+                            p: 4,
+                            textAlign: "center",
+                            background: "rgba(255,255,255,0.05)",
+                            cursor: "pointer",
+                            transition: "all 0.3s ease",
+                            "&:hover": { background: "rgba(255,255,255,0.1)", borderColor: "rgba(255,255,255,0.6)" },
+                          }}
+                          component="label"
+                        >
+                          <ImageIcon sx={{ fontSize: 48, color: "rgba(255,255,255,0.6)", mb: 1 }} />
+                          <Typography color="white" variant="h6">Upload UI Screenshot</Typography>
+                          <Typography color="rgba(255,255,255,0.7)" fontSize={13} mt={1}>
+                            AI will analyze the screenshot and generate test cases
+                          </Typography>
+                          <input type="file" hidden accept="image/*" onChange={handleScreenshotChange} />
+                        </Box>
+                      ) : (
+                        <Box sx={{ position: "relative", border: "2px solid rgba(66,165,245,0.6)", borderRadius: "12px", p: 1, background: "rgba(255,255,255,0.05)" }}>
+                          <img src={screenshotPreview} alt="Preview" style={{ width: "100%", borderRadius: "8px", display: "block" }} />
+                          <IconButton
+                            onClick={removeScreenshot}
+                            sx={{
+                              position: "absolute",
+                              top: 10,
+                              right: 10,
+                              background: "rgba(255,255,255,0.9)",
+                              "&:hover": { background: "white" },
+                            }}
+                            size="small"
+                          >
+                            <CloseIcon />
+                          </IconButton>
+                        </Box>
+                      )}
+                    </Box>
+                  )}
+
+                  {/* TEST DATA (collapsed accordion - same for both modes) */}
+                  <Box mt={2} sx={{ background: "rgba(255,255,255,0.08)", borderRadius: "12px", overflow: "hidden" }}>
+                    <Box
+                      onClick={() => document.getElementById("test-data-content").classList.toggle("hidden")}
+                      sx={{ p: 1.5, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", "&:hover": { background: "rgba(255,255,255,0.05)" } }}
+                    >
+                      <Typography color="white">🔑 Test Data (credentials, sample inputs) — JSON format</Typography>
+                      <ExpandMoreIcon sx={{ color: "white" }} />
+                    </Box>
+                    <Box id="test-data-content" className="hidden" sx={{ p: 2, pt: 0, display: "none", "&:not(.hidden)": { display: "block" } }}>
+                      <Typography fontSize={12} color="rgba(255,255,255,0.7)" mb={1}>
+                        Provide credentials and sample data for AI to generate executable tests.
+                      </Typography>
+                      <TextField fullWidth multiline rows={4} value={testDataJson} onChange={(e) => setTestDataJson(e.target.value)} sx={inputSx} />
+                    </Box>
+                  </Box>
+
+                  <Box mt={2} display="flex" gap={2} flexWrap="wrap" alignItems="center">
+                    <Button
+                      variant="contained"
+                      startIcon={inputMode === "screenshot" ? <CameraAltIcon /> : <BoltIcon />}
+                      onClick={generateTestCases}
+                      sx={primaryBtn}
+                      disabled={loading || (inputMode === "screenshot" && !screenshotFile)}
+                    >
+                      {loading ? "Generating..." : inputMode === "screenshot" ? "Generate from Screenshot" : "Generate"}
+                    </Button>
+                    <Button variant="contained" startIcon={<CleaningServicesIcon />} onClick={clearAll} sx={secondaryBtn}>Clear</Button>
+
+                    {testcases.length > 0 && (
+                      <>
+                        <Button variant="contained" startIcon={<ContentCopyIcon />} onClick={copyToClipboard} sx={secondaryBtn}>Copy</Button>
+                        <Button variant="contained" startIcon={<AssessmentIcon />} onClick={exportToCSV} sx={successBtn}>Export CSV</Button>
+                        <Button variant="contained" startIcon={<SaveIcon />} onClick={openSaveDialog}
+                          sx={{ borderRadius: "25px", background: "linear-gradient(45deg, #00897b, #26a69a)", textTransform: "none", color: "white", fontWeight: "bold", "&:hover": { transform: "translateY(-2px)" } }}>
+                          {currentSuiteId ? "Save / Update Suite" : "Save as Suite"}
+                        </Button>
+                        <Button variant="contained" onClick={executeTestCases} disabled={executing}
+                          sx={{ background: "#ff9800", "&:hover": { background: "#fb8c00" }, borderRadius: "20px", textTransform: "none" }}>
+                          {executing ? "Running..." : "Run Test Cases"}
+                        </Button>
+                      </>
+                    )}
+
+                    {executing && (
+                      <Button variant="contained" startIcon={<StopCircleIcon />} onClick={stopExecution} disabled={stopping}
+                        sx={{
+                          background: "linear-gradient(45deg, #e53935, #ff5252)",
+                          "&:hover": { background: "linear-gradient(45deg, #c62828, #e53935)", transform: "translateY(-2px)" },
+                          borderRadius: "20px", textTransform: "none", fontWeight: "bold", color: "white",
+                        }}>
+                        {stopping ? "Stopping..." : "Stop Execution"}
+                      </Button>
+                    )}
+
+                    {testcases.length > 0 && (
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 2, color: "white", flexWrap: "wrap" }}>
+                        <FormControlLabel
+                          control={<Switch checked={selfHealEnabled} onChange={(e) => setSelfHealEnabled(e.target.checked)} />}
+                          label={<span style={{ fontSize: 13, color: "white" }}>🩹 Self-heal</span>}
+                        />
+                        <FormControlLabel
+                          control={<Switch checked={headlessMode} onChange={(e) => setHeadlessMode(e.target.checked)} />}
+                          label={<span style={{ fontSize: 13, color: "white" }}>Headless</span>}
+                        />
+                      </Box>
+                    )}
+                  </Box>
+
+                  {/* SCREENSHOT LIGHTBOX */}
+                  <Dialog
+                    open={Boolean(selectedImage)} onClose={() => setSelectedImage(null)} maxWidth={false}
+                    PaperProps={{ sx: { background: "transparent", boxShadow: "none", overflow: "visible", margin: 2 } }}
+                    BackdropProps={{ sx: { backgroundColor: "rgba(0,0,0,0.85)" } }}
+                  >
+                    <Box onClick={() => setSelectedImage(null)} sx={{ cursor: "pointer", position: "relative", display: "flex", justifyContent: "center", alignItems: "center" }}>
+                      <IconButton onClick={(e) => { e.stopPropagation(); setSelectedImage(null); }}
+                        sx={{ position: "absolute", top: -10, right: -10, background: "rgba(255,255,255,0.9)", color: "#333", "&:hover": { background: "white" }, zIndex: 2 }} size="small">
+                        <CloseIcon />
+                      </IconButton>
+                      {selectedImage && (
+                        <img src={selectedImage} alt="Screenshot" style={{ maxWidth: "92vw", maxHeight: "88vh", borderRadius: "10px", boxShadow: "0 10px 40px rgba(0,0,0,0.5)", display: "block" }} />
+                      )}
+                    </Box>
+                  </Dialog>
+
+                  {/* GENERATED TEST CASES TABLE */}
+                  {!loading && testcases.length > 0 && (
+                    <Box mt={3}>
+                      <SectionHeader
+                        title="📋 Generated Test Cases"
+                        count={filtered.length}
+                        isOpen={showTestcases}
+                        onToggle={() => setShowTestcases((p) => !p)}
+                        extra={editedIds.size > 0 && (
+                          <Chip icon={<EditIcon sx={{ color: "white !important" }} />} label={`${editedIds.size} edited`} size="small" sx={{ background: "rgba(255,193,7,0.4)", color: "white" }} />
+                        )}
+                      />
+
+                      <Collapse in={showTestcases} timeout={300} unmountOnExit>
+                        <Box>
+                          <Box mt={1} mb={1} sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+                            <Typography color="white" fontSize={14}>Filter by Priority:</Typography>
+                            <Select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} size="small"
+                              sx={{ background: "rgba(255,255,255,0.2)", color: "white", borderRadius: "8px" }}>
+                              <MenuItem value="All">All</MenuItem>
+                              <MenuItem value="High">High</MenuItem>
+                              <MenuItem value="Medium">Medium</MenuItem>
+                              <MenuItem value="Low">Low</MenuItem>
+                            </Select>
+                            <Typography color="rgba(255,255,255,0.7)" fontSize={12} fontStyle="italic">
+                              💡 Click any cell to edit. Press Enter to save, Esc to cancel.
+                            </Typography>
+                          </Box>
+
+                          <table style={{ width: "100%", marginTop: "10px", borderCollapse: "collapse", background: "rgba(255,255,255,0.1)", backdropFilter: "blur(10px)", borderRadius: "10px" }}>
+                            <thead>
+                              <tr style={{ background: "rgba(255,255,255,0.25)", color: "white" }}>
+                                <th style={thStyle}>ID</th>
+                                <th style={thStyle}>Scenario</th>
+                                <th style={thStyle}>Steps</th>
+                                <th style={thStyle}>Expected</th>
+                                <th style={thStyle}>Priority</th>
+                                <th style={thStyle}>Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filtered.map((tc, i) => {
+                                const isEdited = editedIds.has(tc.testCaseId);
+                                return (
+                                  <tr key={tc.testCaseId || i} style={{ borderBottom: "1px solid rgba(255,255,255,0.2)", background: isEdited ? "rgba(255,193,7,0.08)" : "transparent" }}>
+                                    <td style={tdStyle}>
+                                      {tc.testCaseId}
+                                      {isEdited && <MuiTooltip title="Edited"><EditIcon sx={{ fontSize: 14, ml: 0.5, color: "#ffc107", verticalAlign: "middle" }} /></MuiTooltip>}
+                                    </td>
+                                    <td style={editableTdStyle}>
+                                      <EditableCell tcId={tc.testCaseId} field="title" value={tc.title} multiline />
+                                    </td>
+                                    <td style={editableTdStyle}>
+                                      <EditableCell
+                                        tcId={tc.testCaseId}
+                                        field="testStepsAll"
+                                        value={Array.isArray(tc.testSteps) ? tc.testSteps.join("\n") : (tc.testSteps || "")}
+                                        multiline
+                                      />
+                                    </td>
+                                    <td style={editableTdStyle}>
+                                      <EditableCell tcId={tc.testCaseId} field="expectedResult" value={tc.expectedResult} multiline />
+                                    </td>
+                                    <td style={editableTdStyle}>
+                                      <EditableCell tcId={tc.testCaseId} field="priority" value={tc.priority} />
+                                    </td>
+                                    <td style={tdStyle}>
+                                      {isEdited && (
+                                        <MuiTooltip title="Reset to original">
+                                          <IconButton size="small" onClick={() => resetTestCase(tc.testCaseId)} sx={{ color: "#ffc107" }}>
+                                            <RestoreIcon fontSize="small" />
+                                          </IconButton>
+                                        </MuiTooltip>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </Box>
+                      </Collapse>
+                    </Box>
+                  )}
+
+                  {executing && !liveProgress && (
+                    <Box mt={3}>
+                      <Typography color="white" mb={1}>⚙️ Executing test cases on the live application...</Typography>
+                      <LinearProgress sx={{ borderRadius: 5, height: 6 }} />
+                    </Box>
+                  )}
+
+                  {/* EXECUTION RESULTS TABLE */}
+                  {executionResults.length > 0 && (
+                    <Box mt={3}>
+                      <SectionHeader
+                        title="🧪 Execution Results"
+                        isOpen={showResults}
+                        onToggle={() => setShowResults((p) => !p)}
+                        extra={
+                          <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                            <Chip label={`Pass: ${executionResults.filter((r) => r.status === "Pass").length}`} size="small" sx={{ background: "rgba(76,175,80,0.4)", color: "white", fontWeight: 600 }} />
+                            <Chip label={`Fail: ${executionResults.filter((r) => r.status === "Fail").length}`} size="small" sx={{ background: "rgba(244,67,54,0.4)", color: "white", fontWeight: 600 }} />
+                            {executionResults.filter((r) => r.status === "Skipped").length > 0 && (
+                              <Chip label={`Skipped: ${executionResults.filter((r) => r.status === "Skipped").length}`} size="small" sx={{ background: "rgba(158,158,158,0.5)", color: "white", fontWeight: 600 }} />
+                            )}
+                            {executionResults.filter((r) => r.healed).length > 0 && (
+                              <Chip
+                                icon={<HealingIcon sx={{ color: "white !important", fontSize: 16 }} />}
+                                label={`Healed: ${executionResults.filter((r) => r.healed).length}`}
+                                size="small"
+                                sx={{ background: "rgba(156,39,176,0.5)", color: "white", fontWeight: 600 }}
+                              />
+                            )}
+                          </Box>
+                        }
+                      />
+
+                      <Collapse in={showResults} timeout={300} unmountOnExit>
+                        <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "10px" }}>
+                          <thead>
+                            <tr style={{ background: "rgba(255,255,255,0.25)" }}>
+                              <th style={thStyle}>Test Case ID</th>
+                              <th style={thStyle}>Title</th>
+                              <th style={thStyle}>Status</th>
+                              <th style={thStyle}>Screenshot</th>
+                              <th style={thStyle}>Failure Reason</th>
+                              <th style={thStyle}>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {executionResults.map((r, i) => {
+                              const rowBg = r.status === "Fail" ? "rgba(255,0,0,0.15)"
+                                : r.status === "Skipped" ? "rgba(158,158,158,0.15)"
+                                : r.healed ? "rgba(156,39,176,0.12)" : "transparent";
+                              const statusColor = r.status === "Pass" ? "#4caf50"
+                                : r.status === "Fail" ? "#f44336" : "#bdbdbd";
+                              return (
+                                <tr key={i} style={{ background: rowBg, borderBottom: "1px solid rgba(255,255,255,0.2)" }}>
+                                  <td style={tdStyle}>{r.testCaseId}</td>
+                                  <td style={tdStyle}>{r.title || ""}</td>
+                                  <td style={{ ...tdStyle, fontWeight: "bold", color: statusColor }}>
+                                    {r.status}
+                                    {r.healed && (
+                                      <MuiTooltip title="View healing details">
+                                        <IconButton size="small" onClick={() => setHealInfoDialog(r)} sx={{ ml: 0.5, color: "#ce93d8" }}>
+                                          <HealingIcon fontSize="small" />
+                                        </IconButton>
+                                      </MuiTooltip>
+                                    )}
+                                  </td>
+                                  <td style={tdStyle}>
+                                    {r.screenshot && (
+                                      <img src={`${API}${r.screenshot}`} alt="screenshot"
+                                        style={{ width: "120px", borderRadius: "8px", cursor: "pointer", border: "1px solid rgba(255,255,255,0.3)", transition: "0.2s" }}
+                                        onClick={() => setSelectedImage(`${API}${r.screenshot}`)}
+                                        onMouseOver={(e) => (e.target.style.transform = "scale(1.05)")}
+                                        onMouseOut={(e) => (e.target.style.transform = "scale(1)")}
+                                      />
+                                    )}
+                                  </td>
+                                  <td style={tdStyle}>
+                                    {r.status === "Fail" ? <span style={{ color: "#ff8a80", fontSize: 13 }}>{r.error}</span>
+                                      : r.status === "Skipped" ? <span style={{ color: "#bdbdbd", fontSize: 13, fontStyle: "italic" }}>{r.error}</span>
+                                      : <span style={{ color: "#81c784" }}>No issues{r.healed && " (healed)"}</span>}
+                                  </td>
+                                  <td style={tdStyle}>
+                                    {r.status === "Fail" && (
+                                      <MuiTooltip title="Generate Bug Report">
+                                        <IconButton size="small" onClick={() => openBugReportModal(r)} sx={{ color: "#ff5252" }}>
+                                          <BugReportIcon fontSize="small" />
+                                        </IconButton>
+                                      </MuiTooltip>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </Collapse>
+                    </Box>
+                  )}
+                </CardContent>
+              </Card>
+            </Box>
+
+            {/* CONVERSATIONAL REFINEMENT SIDEBAR */}
+            {refinementOpen && (
+              <Paper
+                sx={{
+                  width: 400,
+                  height: "calc(100vh - 100px)",
+                  display: "flex",
+                  flexDirection: "column",
+                  background: "rgba(255,255,255,0.95)",
+                  backdropFilter: "blur(10px)",
+                  borderRadius: "12px",
+                  overflow: "hidden",
+                }}
               >
-                <Box onClick={() => setSelectedImage(null)} sx={{ cursor: "pointer", position: "relative", display: "flex", justifyContent: "center", alignItems: "center" }}>
-                  <IconButton onClick={(e) => { e.stopPropagation(); setSelectedImage(null); }}
-                    sx={{ position: "absolute", top: -10, right: -10, background: "rgba(255,255,255,0.9)", color: "#333", "&:hover": { background: "white" }, zIndex: 2 }} size="small">
-                    <CloseIcon />
-                  </IconButton>
-                  {selectedImage && (
-                    <img src={selectedImage} alt="Screenshot" style={{ maxWidth: "92vw", maxHeight: "88vh", borderRadius: "10px", boxShadow: "0 10px 40px rgba(0,0,0,0.5)", display: "block" }} />
+                <Box sx={{ p: 2, borderBottom: "1px solid #ddd", background: "linear-gradient(135deg, #9c27b0, #ba68c8)", color: "white" }}>
+                  <Typography variant="h6" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <ChatIcon /> Refine Test Cases
+                  </Typography>
+                  <Typography variant="caption">
+                    Tell me which test to edit (e.g., "TC_005 should use invalid password")
+                  </Typography>
+                </Box>
+
+                <Box sx={{ flex: 1, overflowY: "auto", p: 2 }}>
+                  {chatMessages.length === 0 && (
+                    <Typography color="text.secondary" fontSize={13} textAlign="center" mt={4}>
+                      No messages yet. Start a conversation!
+                    </Typography>
+                  )}
+                  {chatMessages.map((msg, i) => (
+                    <Box
+                      key={i}
+                      sx={{
+                        mb: 1.5,
+                        p: 1.5,
+                        borderRadius: "12px",
+                        background: msg.role === "user" ? "linear-gradient(135deg, #42a5f5, #478ed1)" : "rgba(0,0,0,0.05)",
+                        color: msg.role === "user" ? "white" : "black",
+                        alignSelf: msg.role === "user" ? "flex-end" : "flex-start",
+                        maxWidth: "85%",
+                      }}
+                    >
+                      <Typography fontSize={13}>{msg.text}</Typography>
+                    </Box>
+                  ))}
+                  {refining && (
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "#9c27b0" }}>
+                      <CircularProgress size={16} />
+                      <Typography fontSize={13}>AI is thinking...</Typography>
+                    </Box>
                   )}
                 </Box>
-              </Dialog>
 
-              {loading && (
-                <table style={{ width: "100%", marginTop: 15 }}>
-                  <thead><tr><th>ID</th><th>Scenario</th><th>Steps</th><th>Expected</th><th>Priority</th></tr></thead>
-                  <tbody>
-                    {Array.from({ length: 5 }).map((_, i) => (
-                      <tr key={i}>
-                        <td><Skeleton variant="text" width={60} /></td>
-                        <td><Skeleton variant="text" width={180} /></td>
-                        <td><Skeleton variant="text" width={220} /><Skeleton variant="text" width={200} /></td>
-                        <td><Skeleton variant="text" width={180} /></td>
-                        <td><Skeleton variant="text" width={80} /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-
-              {/* GENERATED TEST CASES TABLE (now editable) */}
-              {!loading && testcases.length > 0 && (
-                <Box mt={3}>
-                  <SectionHeader
-                    title="📋 Generated Test Cases"
-                    count={filtered.length}
-                    isOpen={showTestcases}
-                    onToggle={() => setShowTestcases((p) => !p)}
-                    extra={editedIds.size > 0 && (
-                      <Chip icon={<EditIcon sx={{ color: "white !important" }} />} label={`${editedIds.size} edited`} size="small" sx={{ background: "rgba(255,193,7,0.4)", color: "white" }} />
-                    )}
+                <Box sx={{ p: 2, borderTop: "1px solid #ddd", display: "flex", gap: 1 }}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    placeholder="e.g., TC_003 password should be wrong123"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyPress={(e) => e.key === "Enter" && sendChatMessage()}
+                    disabled={refining}
                   />
-
-                  <Collapse in={showTestcases} timeout={300} unmountOnExit>
-                    <Box>
-                      <Box mt={1} mb={1} sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
-                        <Typography color="white" fontSize={14}>Filter by Priority:</Typography>
-                        <Select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} size="small"
-                          sx={{ background: "rgba(255,255,255,0.2)", color: "white", borderRadius: "8px" }}>
-                          <MenuItem value="All">All</MenuItem>
-                          <MenuItem value="High">High</MenuItem>
-                          <MenuItem value="Medium">Medium</MenuItem>
-                          <MenuItem value="Low">Low</MenuItem>
-                        </Select>
-                        <Typography color="rgba(255,255,255,0.7)" fontSize={12} fontStyle="italic">
-                          💡 Click any cell to edit. Press Enter to save, Esc to cancel.
-                        </Typography>
-                      </Box>
-
-                      <table style={{ width: "100%", marginTop: "10px", borderCollapse: "collapse", background: "rgba(255,255,255,0.1)", backdropFilter: "blur(10px)", borderRadius: "10px" }}>
-                        <thead>
-                          <tr style={{ background: "rgba(255,255,255,0.25)", color: "white" }}>
-                            <th style={thStyle}>ID</th>
-                            <th style={thStyle}>Scenario</th>
-                            <th style={thStyle}>Steps</th>
-                            <th style={thStyle}>Expected</th>
-                            <th style={thStyle}>Priority</th>
-                            <th style={thStyle}>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filtered.map((tc, i) => {
-                            const isEdited = editedIds.has(tc.testCaseId);
-                            return (
-                              <tr key={tc.testCaseId || i} style={{ borderBottom: "1px solid rgba(255,255,255,0.2)", background: isEdited ? "rgba(255,193,7,0.08)" : "transparent" }}>
-                                <td style={tdStyle}>
-                                  {tc.testCaseId}
-                                  {isEdited && <MuiTooltip title="Edited"><EditIcon sx={{ fontSize: 14, ml: 0.5, color: "#ffc107", verticalAlign: "middle" }} /></MuiTooltip>}
-                                </td>
-                                <td style={editableTdStyle}>
-                                  <EditableCell tcId={tc.testCaseId} field="title" value={tc.title} multiline />
-                                </td>
-                                <td style={editableTdStyle}>
-                                  <EditableCell
-                                    tcId={tc.testCaseId}
-                                    field="testStepsAll"
-                                    value={Array.isArray(tc.testSteps) ? tc.testSteps.join("\n") : (tc.testSteps || "")}
-                                    multiline
-                                  />
-                                </td>
-                                <td style={editableTdStyle}>
-                                  <EditableCell tcId={tc.testCaseId} field="expectedResult" value={tc.expectedResult} multiline />
-                                </td>
-                                <td style={editableTdStyle}>
-                                  <EditableCell tcId={tc.testCaseId} field="priority" value={tc.priority} />
-                                </td>
-                                <td style={tdStyle}>
-                                  {isEdited && (
-                                    <MuiTooltip title="Reset to original">
-                                      <IconButton size="small" onClick={() => resetTestCase(tc.testCaseId)} sx={{ color: "#ffc107" }}>
-                                        <RestoreIcon fontSize="small" />
-                                      </IconButton>
-                                    </MuiTooltip>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </Box>
-                  </Collapse>
+                  <IconButton onClick={sendChatMessage} disabled={refining || !chatInput.trim()} color="primary">
+                    <SendIcon />
+                  </IconButton>
                 </Box>
-              )}
-
-              {executing && (
-                <Box mt={3}>
-                  <Typography color="white" mb={1}>⚙️ Executing test cases on the live application...</Typography>
-                  <LinearProgress sx={{ borderRadius: 5, height: 6 }} />
-                </Box>
-              )}
-
-              {/* EXECUTION RESULTS TABLE */}
-              {executionResults.length > 0 && (
-                <Box mt={3}>
-                  <SectionHeader
-                    title="🧪 Execution Results"
-                    isOpen={showResults}
-                    onToggle={() => setShowResults((p) => !p)}
-                    extra={
-                      <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
-                        <Chip label={`Pass: ${executionResults.filter((r) => r.status === "Pass").length}`} size="small" sx={{ background: "rgba(76,175,80,0.4)", color: "white", fontWeight: 600 }} />
-                        <Chip label={`Fail: ${executionResults.filter((r) => r.status === "Fail").length}`} size="small" sx={{ background: "rgba(244,67,54,0.4)", color: "white", fontWeight: 600 }} />
-                        {executionResults.filter((r) => r.status === "Skipped").length > 0 && (
-                          <Chip label={`Skipped: ${executionResults.filter((r) => r.status === "Skipped").length}`} size="small" sx={{ background: "rgba(158,158,158,0.5)", color: "white", fontWeight: 600 }} />
-                        )}
-                        {executionResults.filter((r) => r.healed).length > 0 && (
-                          <Chip
-                            icon={<HealingIcon sx={{ color: "white !important", fontSize: 16 }} />}
-                            label={`Healed: ${executionResults.filter((r) => r.healed).length}`}
-                            size="small"
-                            sx={{ background: "rgba(156,39,176,0.5)", color: "white", fontWeight: 600 }}
-                          />
-                        )}
-                      </Box>
-                    }
-                  />
-
-                  <Collapse in={showResults} timeout={300} unmountOnExit>
-                    <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "10px" }}>
-                      <thead>
-                        <tr style={{ background: "rgba(255,255,255,0.25)" }}>
-                          <th style={thStyle}>Test Case ID</th>
-                          <th style={thStyle}>Title</th>
-                          <th style={thStyle}>Status</th>
-                          <th style={thStyle}>Screenshot</th>
-                          <th style={thStyle}>Failure Reason</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {executionResults.map((r, i) => {
-                          const rowBg = r.status === "Fail" ? "rgba(255,0,0,0.15)"
-                            : r.status === "Skipped" ? "rgba(158,158,158,0.15)"
-                            : r.healed ? "rgba(156,39,176,0.12)" : "transparent";
-                          const statusColor = r.status === "Pass" ? "#4caf50"
-                            : r.status === "Fail" ? "#f44336" : "#bdbdbd";
-                          return (
-                            <tr key={i} style={{ background: rowBg, borderBottom: "1px solid rgba(255,255,255,0.2)" }}>
-                              <td style={tdStyle}>{r.testCaseId}</td>
-                              <td style={tdStyle}>{r.title || ""}</td>
-                              <td style={{ ...tdStyle, fontWeight: "bold", color: statusColor }}>
-                                {r.status}
-                                {r.healed && (
-                                  <MuiTooltip title="View healing details">
-                                    <IconButton size="small" onClick={() => setHealInfoDialog(r)} sx={{ ml: 0.5, color: "#ce93d8" }}>
-                                      <HealingIcon fontSize="small" />
-                                    </IconButton>
-                                  </MuiTooltip>
-                                )}
-                              </td>
-                              <td style={tdStyle}>
-                                {r.screenshot && (
-                                  <img src={`${API}${r.screenshot}`} alt="screenshot"
-                                    style={{ width: "120px", borderRadius: "8px", cursor: "pointer", border: "1px solid rgba(255,255,255,0.3)", transition: "0.2s" }}
-                                    onClick={() => setSelectedImage(`${API}${r.screenshot}`)}
-                                    onMouseOver={(e) => (e.target.style.transform = "scale(1.05)")}
-                                    onMouseOut={(e) => (e.target.style.transform = "scale(1)")}
-                                  />
-                                )}
-                              </td>
-                              <td style={tdStyle}>
-                                {r.status === "Fail" ? <span style={{ color: "#ff8a80", fontSize: 13 }}>{r.error}</span>
-                                  : r.status === "Skipped" ? <span style={{ color: "#bdbdbd", fontSize: 13, fontStyle: "italic" }}>{r.error}</span>
-                                  : <span style={{ color: "#81c784" }}>No issues{r.healed && " (healed)"}</span>}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </Collapse>
-                </Box>
-              )}
-            </CardContent>
-          </Card>
+              </Paper>
+            )}
+          </Box>
         )}
 
         {/* ============ SUITES & HISTORY ============ */}
@@ -1020,7 +1479,6 @@ function App() {
             <CardContent>
               <Typography variant="h6" color="white" mb={2}>📁 Suites & Execution History</Typography>
 
-              {/* SUITES LIST */}
               <Typography variant="subtitle1" color="white" mt={1} mb={1} sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <FolderIcon /> Saved Suites
                 <Chip label={suites.length} size="small" sx={{ background: "rgba(255,255,255,0.25)", color: "white" }} />
@@ -1053,12 +1511,12 @@ function App() {
                         <td style={tdStyle}>{s.testCount}</td>
                         <td style={{ ...tdStyle, fontSize: 12 }}>{formatDate(s.updatedAt)}</td>
                         <td style={tdStyle}>
-                          <MuiTooltip title="Load suite into generator">
+                          <MuiTooltip title="Load suite">
                             <IconButton size="small" onClick={() => loadSuite(s.id)} sx={{ color: "#66bb6a" }}>
                               <PlayArrowIcon fontSize="small" />
                             </IconButton>
                           </MuiTooltip>
-                          <MuiTooltip title="View history for this suite">
+                          <MuiTooltip title="View history">
                             <IconButton size="small" onClick={() => { setHistoryFilterSuite(s.id); }} sx={{ color: "#42a5f5" }}>
                               <HistoryIcon fontSize="small" />
                             </IconButton>
@@ -1075,7 +1533,6 @@ function App() {
                 </table>
               )}
 
-              {/* HISTORY */}
               <Typography variant="subtitle1" color="white" mt={4} mb={1} sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
                 <HistoryIcon /> Execution History
                 <Chip label={executions.length} size="small" sx={{ background: "rgba(255,255,255,0.25)", color: "white" }} />
@@ -1129,7 +1586,7 @@ function App() {
                                 <VisibilityIcon fontSize="small" />
                               </IconButton>
                             </MuiTooltip>
-                            <MuiTooltip title="Delete from history">
+                            <MuiTooltip title="Delete">
                               <IconButton size="small" onClick={() => deleteExecution(e.id)} sx={{ color: "#ef5350" }}>
                                 <DeleteIcon fontSize="small" />
                               </IconButton>
@@ -1221,7 +1678,6 @@ function App() {
           />
           <Typography variant="caption" color="text.secondary" mt={1} display="block">
             {testcases.length} test case{testcases.length !== 1 ? "s" : ""} will be saved.
-            App URL and test data are also saved with the suite.
           </Typography>
         </DialogContent>
         <DialogActions>
@@ -1316,6 +1772,36 @@ function App() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setHealInfoDialog(null)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ============ BUG REPORT DIALOG ============ */}
+      <Dialog open={bugReportOpen} onClose={() => setBugReportOpen(false)} fullWidth maxWidth="md">
+        <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <BugReportIcon sx={{ color: "#f44336" }} /> Bug Report
+        </DialogTitle>
+        <DialogContent dividers>
+          {generatingBugReport ? (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 2, p: 4, justifyContent: "center" }}>
+              <CircularProgress />
+              <Typography>Generating bug report...</Typography>
+            </Box>
+          ) : (
+            <TextField
+              fullWidth
+              multiline
+              rows={20}
+              value={generatedBugReport}
+              onChange={(e) => setGeneratedBugReport(e.target.value)}
+              sx={{ fontFamily: "monospace", fontSize: 13 }}
+            />
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBugReportOpen(false)}>Close</Button>
+          <Button onClick={copyBugReport} variant="contained" startIcon={<ContentCopyIcon />} disabled={generatingBugReport}>
+            Copy Report
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>
