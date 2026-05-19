@@ -31,6 +31,10 @@ import SendIcon from "@mui/icons-material/Send";
 import ImageIcon from "@mui/icons-material/Image";
 import TextFieldsIcon from "@mui/icons-material/TextFields";
 import CameraAltIcon from "@mui/icons-material/CameraAlt";
+import FileDownloadIcon from "@mui/icons-material/FileDownload";
+import DescriptionIcon from "@mui/icons-material/Description";
+import TableChartIcon from "@mui/icons-material/TableChart";
+import PictureAsPdfIcon from "@mui/icons-material/PictureAsPdf";
 import io from "socket.io-client";
 
 import {
@@ -45,11 +49,11 @@ import {
   Chip,
   FormControlLabel,
   Switch,
-  Divider,
   Paper,
   CircularProgress,
   ToggleButton,
   ToggleButtonGroup,
+  Menu,
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
@@ -127,28 +131,39 @@ function App() {
   // -------- Heal info dialog state --------
   const [healInfoDialog, setHealInfoDialog] = useState(null);
 
-  // ======== NEW: Screenshot-to-Tests state ========
-  const [inputMode, setInputMode] = useState("text"); // "text" or "screenshot"
+  // ======== Screenshot-to-Tests state ========
+  const [inputMode, setInputMode] = useState("text"); // "text", "screenshot", or "upload"
   const [screenshotFile, setScreenshotFile] = useState(null);
   const [screenshotPreview, setScreenshotPreview] = useState(null);
 
-  // ======== NEW: Conversational Refinement state ========
+  // ======== NEW: Upload Test Cases state ========
+  const [testcaseSource, setTestcaseSource] = useState(null); // "generated" | "uploaded"
+  const [uploadingTestcases, setUploadingTestcases] = useState(false);
+  const [testcaseUploadProgress, setTestcaseUploadProgress] = useState(0);
+
+  // ======== Conversational Refinement state ========
   const [refinementOpen, setRefinementOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [refining, setRefining] = useState(false);
 
-  // ======== NEW: Bug Report state ========
+  // ======== Bug Report state ========
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const [selectedFailure, setSelectedFailure] = useState(null);
   const [generatedBugReport, setGeneratedBugReport] = useState("");
   const [generatingBugReport, setGeneratingBugReport] = useState(false);
 
-  // ======== NEW: Live Execution Streaming state ========
+  // ======== Live Execution Streaming state ========
   const [socket, setSocket] = useState(null);
   const [liveProgress, setLiveProgress] = useState(null);
   const [currentTest, setCurrentTest] = useState(null);
   const [currentStep, setCurrentStep] = useState("");
+
+  // Export states
+  const [exporting, setExporting] = useState(false);
+  const [exportFormat, setExportFormat] = useState(null);
+  const [exportMenuAnchor, setExportMenuAnchor] = useState(null);
+  const [exportMenuExecId, setExportMenuExecId] = useState(null);
 
   // ===========================================================
   // WEBSOCKET CONNECTION
@@ -189,7 +204,7 @@ function App() {
     socketInstance.on("tc:done", (data) => {
       console.log("📡 Test completed:", data);
       setLiveProgress((prev) => prev ? { ...prev, completed: prev.completed + 1 } : null);
-      
+
       // Update results in real-time
       setExecutionResults((prev) => {
         const existing = prev.find((r) => r.testCaseId === data.testCaseId);
@@ -263,7 +278,7 @@ function App() {
       try { parsedTestData = JSON.parse(testDataJson); } catch { }
 
       let res;
-      
+
       if (inputMode === "screenshot" && screenshotFile) {
         // Screenshot mode
         const formData = new FormData();
@@ -299,6 +314,7 @@ function App() {
       setTestcases(tcs);
       setOriginalTestcases(JSON.parse(JSON.stringify(tcs)));
       setEditedIds(new Set());
+      setTestcaseSource("generated"); // NEW: Set source
       setCurrentSuiteId(null);
       setCurrentSuiteName(null);
       setShowTestcases(true);
@@ -307,6 +323,73 @@ function App() {
       alert("Error generating test cases");
     }
     setLoading(false);
+  };
+
+  // ===========================================================
+  // UPLOAD TEST CASES FROM FILE
+  // ===========================================================
+  const uploadTestCases = async (file) => {
+    if (!file) return;
+
+    const allowedTypes = [
+      "text/csv",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ];
+
+    const allowedExtensions = [".csv", ".xlsx", ".docx"];
+    const hasValidExtension = allowedExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
+
+    if (!allowedTypes.includes(file.type) && !hasValidExtension) {
+      alert("Please upload a CSV, XLSX, or DOCX file");
+      return;
+    }
+
+    setUploadingTestcases(true);
+    setTestcaseUploadProgress(0);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await axios.post(`${API}/upload-testcases`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        onUploadProgress: (e) => setTestcaseUploadProgress(Math.round((e.loaded * 100) / e.total)),
+      });
+
+      if (res.data.error) {
+        alert("Error parsing file: " + res.data.error);
+        return;
+      }
+
+      const tcs = res.data.testcases || [];
+
+      if (tcs.length === 0) {
+        alert("No test cases found in file. Please check the file format.");
+        return;
+      }
+
+      setTestcases(tcs);
+      setOriginalTestcases(JSON.parse(JSON.stringify(tcs)));
+      setEditedIds(new Set());
+      setTestcaseSource("uploaded");
+      setCurrentSuiteId(null);
+      setCurrentSuiteName(null);
+      setShowTestcases(true);
+
+      alert(`✅ Successfully loaded ${tcs.length} test cases from file!`);
+    } catch (err) {
+      console.error(err);
+      alert("Error uploading test cases: " + (err.response?.data?.error || err.message));
+    }
+
+    setUploadingTestcases(false);
+    setTestcaseUploadProgress(0);
+  };
+
+  const handleTestcaseFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) uploadTestCases(file);
   };
 
   // ===========================================================
@@ -377,7 +460,7 @@ function App() {
   // ===========================================================
   const sendChatMessage = async () => {
     if (!chatInput.trim()) return;
-    
+
     const userMsg = chatInput.trim();
     setChatMessages((prev) => [...prev, { role: "user", text: userMsg }]);
     setChatInput("");
@@ -397,7 +480,7 @@ function App() {
 
       const tcId = tcMatch[0].toUpperCase();
       const testCase = testcases.find((tc) => tc.testCaseId === tcId);
-      
+
       if (!testCase) {
         setChatMessages((prev) => [...prev, {
           role: "assistant",
@@ -414,14 +497,14 @@ function App() {
       });
 
       const data = await res.json();
-      
+
       if (data.updatedTestCase) {
         // Update test case in state
         setTestcases((prev) =>
           prev.map((tc) => tc.testCaseId === tcId ? data.updatedTestCase : tc)
         );
         setEditedIds((prev) => new Set(prev).add(tcId));
-        
+
         setChatMessages((prev) => [...prev, {
           role: "assistant",
           text: `✅ Updated ${tcId}! Check the test cases table to see the changes.`
@@ -456,7 +539,7 @@ function App() {
     setGeneratingBugReport(true);
     try {
       const testCase = testcases.find((tc) => tc.testCaseId === result.testCaseId);
-      
+
       const res = await fetch(`${API}/generate-bug-report`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -505,6 +588,7 @@ function App() {
     setCurrentSuiteName(null);
     setScreenshotFile(null);
     setScreenshotPreview(null);
+    setTestcaseSource(null); // NEW: Reset source
   };
 
   const copyToClipboard = () => {
@@ -647,32 +731,62 @@ function App() {
     setEditValue("");
   };
 
-  const saveEdit = () => {
+  const saveEdit = (finalValue = null) => {
     if (!editingCell) return;
     const { tcId, field, stepIdx } = editingCell;
 
+    // Use provided value or fall back to editValue state
+    const valueToSave = finalValue !== null ? finalValue : editValue;
+
+    // Get the original value to compare
+    const originalTC = testcases.find(tc => tc.testCaseId === tcId);
+    if (!originalTC) {
+      setEditingCell(null);
+      setEditValue("");
+      return;
+    }
+
+    let originalValue;
+    if (field === "testSteps" && typeof stepIdx === "number") {
+      originalValue = originalTC.testSteps?.[stepIdx] || "";
+    } else if (field === "testStepsAll") {
+      originalValue = (originalTC.testSteps || []).join("\n");
+    } else {
+      originalValue = originalTC[field] || "";
+    }
+
+    // ✅ FIX: Only update if value actually changed
+    if (valueToSave === originalValue) {
+      // No change - just close the editor without updating
+      setEditingCell(null);
+      setEditValue("");
+      return;
+    }
+
+    // Value changed - proceed with update
     setTestcases((prev) =>
       prev.map((tc) => {
         if (tc.testCaseId !== tcId) return tc;
         const updated = { ...tc };
 
         if (field === "testSteps" && typeof stepIdx === "number") {
-          if (editValue.includes("\n")) {
-            updated.testSteps = editValue.split("\n").filter((s) => s.trim());
+          if (valueToSave.includes("\n")) {
+            updated.testSteps = valueToSave.split("\n").filter((s) => s.trim());
           } else {
             const newSteps = [...(updated.testSteps || [])];
-            newSteps[stepIdx] = editValue;
+            newSteps[stepIdx] = valueToSave;
             updated.testSteps = newSteps;
           }
         } else if (field === "testStepsAll") {
-          updated.testSteps = editValue.split("\n").filter((s) => s.trim());
+          updated.testSteps = valueToSave.split("\n").filter((s) => s.trim());
         } else {
-          updated[field] = editValue;
+          updated[field] = valueToSave;
         }
         return updated;
       })
     );
 
+    // ✅ FIX: Only add to editedIds if value actually changed
     setEditedIds((prev) => new Set(prev).add(tcId));
     setEditingCell(null);
     setEditValue("");
@@ -687,6 +801,109 @@ function App() {
       next.delete(tcId);
       return next;
     });
+  };
+
+  // ===========================================================
+  // EXPORT EXECUTION REPORT
+  // ===========================================================
+  const exportReport = async (format, executionData = null) => {
+    setExporting(true);
+    setExportFormat(format);
+
+    try {
+      const dataToExport = executionData || {
+        suiteName: currentSuiteName || "Test Run",
+        executedAt: Date.now(),
+        appUrl: appUrl,
+        results: executionResults,
+        summary: {
+          total: executionResults.length,
+          pass: executionResults.filter(r => r.status === "Pass").length,
+          fail: executionResults.filter(r => r.status === "Fail").length,
+          healed: executionResults.filter(r => r.healed).length,
+          passRate: executionResults.length > 0
+            ? Math.round((executionResults.filter(r => r.status === "Pass").length / executionResults.length) * 100)
+            : 0
+        }
+      };
+
+      const response = await fetch(`${API}/export-report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ format: format, execution: dataToExport }),
+      });
+
+      if (!response.ok) throw new Error("Export failed");
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+
+      const timestamp = new Date().toISOString().split('T')[0];
+      const extension = format === 'xlsx' ? 'xlsx' : format === 'pdf' ? 'pdf' : 'csv';
+      a.download = `TestForge_Report_${timestamp}.${extension}`;
+
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      alert(`✅ Report exported successfully as ${format.toUpperCase()}!`);
+    } catch (err) {
+      console.error("Export error:", err);
+      alert("❌ Export failed: " + err.message);
+    }
+
+    setExporting(false);
+    setExportFormat(null);
+  };
+
+  const exportHistoricalReport = async (executionId, format) => {
+    setExporting(true);
+    setExportFormat(format);
+
+    try {
+      const response = await fetch(`${API}/export-report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ executionId: executionId, format: format }),
+      });
+
+      if (!response.ok) throw new Error("Export failed");
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+
+      const timestamp = new Date().toISOString().split('T')[0];
+      const extension = format === 'xlsx' ? 'xlsx' : format === 'pdf' ? 'pdf' : 'csv';
+      a.download = `TestForge_Report_${timestamp}.${extension}`;
+
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      alert(`✅ Report exported successfully!`);
+    } catch (err) {
+      console.error("Export error:", err);
+      alert("❌ Export failed: " + err.message);
+    }
+
+    setExporting(false);
+    setExportFormat(null);
+  };
+
+  const handleExportMenuOpen = (event, execId) => {
+    setExportMenuAnchor(event.currentTarget);
+    setExportMenuExecId(execId);
+  };
+
+  const handleExportMenuClose = () => {
+    setExportMenuAnchor(null);
+    setExportMenuExecId(null);
   };
 
   // ===========================================================
@@ -749,6 +966,7 @@ function App() {
       setEditedIds(new Set());
       setCurrentSuiteId(s.id);
       setCurrentSuiteName(s.name);
+      setTestcaseSource("generated"); // Loaded suites are marked as generated
       setExecutionResults([]);
       setShowTestcases(true);
       setActiveTab("test");
@@ -866,26 +1084,157 @@ function App() {
     </Box>
   );
 
+  // ============================================================
+  // LOADING SKELETON COMPONENT
+  // ============================================================
+  // ============================================================
+  // IMPROVED LOADING SKELETON COMPONENT (Table-like)
+  // ============================================================
+  // REPLACE the existing TestCaseSkeleton component in App.js with this:
+
+  const TestCaseSkeleton = () => (
+    <Box mt={3}>
+      <Typography variant="h6" color="white" mb={2} sx={{ opacity: 0.9, textAlign: "center" }}>
+        ⚙️ Generating test cases... This may take 10-30 seconds.
+      </Typography>
+
+      {/* Table Header Skeleton */}
+      <Box sx={{
+        display: "grid",
+        gridTemplateColumns: "80px 1fr 2fr 1fr 80px 80px",
+        gap: 1,
+        mb: 1,
+        p: 1.5,
+        background: "rgba(255,255,255,0.25)",
+        borderRadius: "8px 8px 0 0"
+      }}>
+        {["ID", "Scenario", "Steps", "Expected", "Priority", "Actions"].map((header, i) => (
+          <Box key={i} sx={{
+            height: 20,
+            background: "rgba(255,255,255,0.4)",
+            borderRadius: "4px",
+            animation: "pulse 1.5s ease-in-out infinite",
+            animationDelay: `${i * 0.1}s`
+          }} />
+        ))}
+      </Box>
+
+      {/* Table Rows Skeleton */}
+      {[1, 2, 3, 4, 5, 6, 7].map((row) => (
+        <Box key={row} sx={{
+          display: "grid",
+          gridTemplateColumns: "80px 1fr 2fr 1fr 80px 80px",
+          gap: 1,
+          mb: 1,
+          p: 1.5,
+          background: "rgba(255,255,255,0.1)",
+          borderRadius: "4px",
+          border: "1px solid rgba(255,255,255,0.15)"
+        }}>
+          {/* ID column */}
+          <Box sx={{
+            height: 20,
+            background: "rgba(255,255,255,0.2)",
+            borderRadius: "4px",
+            animation: "pulse 1.5s ease-in-out infinite",
+            animationDelay: `${row * 0.08}s`
+          }} />
+
+          {/* Scenario column */}
+          <Box sx={{
+            height: 20,
+            background: "rgba(255,255,255,0.15)",
+            borderRadius: "4px",
+            animation: "pulse 1.5s ease-in-out infinite",
+            animationDelay: `${row * 0.08 + 0.1}s`
+          }} />
+
+          {/* Steps column (taller) */}
+          <Box sx={{
+            height: 60,
+            background: "rgba(255,255,255,0.15)",
+            borderRadius: "4px",
+            animation: "pulse 1.5s ease-in-out infinite",
+            animationDelay: `${row * 0.08 + 0.2}s`
+          }} />
+
+          {/* Expected column */}
+          <Box sx={{
+            height: 20,
+            background: "rgba(255,255,255,0.15)",
+            borderRadius: "4px",
+            animation: "pulse 1.5s ease-in-out infinite",
+            animationDelay: `${row * 0.08 + 0.3}s`
+          }} />
+
+          {/* Priority column */}
+          <Box sx={{
+            height: 20,
+            background: "rgba(255,255,255,0.2)",
+            borderRadius: "4px",
+            animation: "pulse 1.5s ease-in-out infinite",
+            animationDelay: `${row * 0.08 + 0.4}s`
+          }} />
+
+          {/* Actions column */}
+          <Box sx={{
+            height: 20,
+            background: "rgba(255,255,255,0.2)",
+            borderRadius: "4px",
+            animation: "pulse 1.5s ease-in-out infinite",
+            animationDelay: `${row * 0.08 + 0.5}s`
+          }} />
+        </Box>
+      ))}
+
+      <style>{`
+      @keyframes pulse {
+        0%, 100% { 
+          opacity: 1;
+        }
+        50% { 
+          opacity: 0.5;
+        }
+      }
+    `}</style>
+    </Box>
+  );
+
+
   const EditableCell = ({ tcId, field, value, multiline = false, stepIdx }) => {
+    const inputRef = React.useRef(null);
+    
     const isEditing = editingCell &&
       editingCell.tcId === tcId &&
       editingCell.field === field &&
       editingCell.stepIdx === stepIdx;
 
+    // ✅ Handle save - pass value directly to avoid stale state
+    const handleSave = () => {
+      if (!inputRef.current) return;
+      const finalValue = inputRef.current.value || "";
+      saveEdit(finalValue);  // ✅ Pass value directly
+    };
+
     if (isEditing) {
       return (
         <TextField
+          inputRef={inputRef}
           autoFocus
           fullWidth
           multiline={multiline}
           minRows={multiline ? 3 : 1}
-          value={editValue}
-          onChange={(e) => setEditValue(e.target.value)}
-          onBlur={saveEdit}
+          defaultValue={editValue}
+          onBlur={handleSave}  // ✅ Simplified
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !multiline) { e.preventDefault(); saveEdit(); }
+            if (e.key === "Enter" && !multiline) { 
+              e.preventDefault();
+              handleSave();
+            }
             if (e.key === "Escape") cancelEdit();
-            if (e.key === "Enter" && multiline && (e.ctrlKey || e.metaKey)) saveEdit();
+            if (e.key === "Enter" && multiline && (e.ctrlKey || e.metaKey)) {
+              handleSave();
+            }
           }}
           size="small"
           sx={{
@@ -909,6 +1258,92 @@ function App() {
       >
         {value || <span style={{ color: "rgba(255,255,255,0.4)", fontStyle: "italic" }}>Click to edit…</span>}
       </Box>
+    );
+  };
+
+  // ===========================================================
+  // EXPORT MENU COMPONENT (FIXED)
+  // ===========================================================
+  const ExportMenu = ({ onExport, disabled = false }) => {
+    const [anchorEl, setAnchorEl] = useState(null);
+    const open = Boolean(anchorEl);
+
+    const handleClick = (e) => {
+      e.stopPropagation(); // Prevent toggle of parent section
+      setAnchorEl(e.currentTarget);
+    };
+
+    const handleClose = (e) => {
+      if (e) e.stopPropagation(); // Prevent toggle when closing menu
+      setAnchorEl(null);
+    };
+
+    const handleExportClick = (format, e) => {
+      if (e) e.stopPropagation(); // Prevent toggle when selecting format
+      onExport(format);
+      handleClose();
+    };
+
+    return (
+      <>
+        <Button
+          variant="contained"
+          startIcon={exporting ? <CircularProgress size={16} color="inherit" /> : <FileDownloadIcon />}
+          onClick={handleClick}
+          disabled={disabled || exporting}
+          sx={{
+            borderRadius: "25px",
+            background: "linear-gradient(45deg, #00897b, #26a69a)",
+            textTransform: "none",
+            color: "white",
+            fontWeight: "bold",
+            padding: "6px 16px",
+            "&:hover": {
+              transform: "translateY(-2px)",
+              background: "linear-gradient(45deg, #00695c, #00897b)",
+              boxShadow: "0 4px 12px rgba(0,137,123,0.4)"
+            },
+          }}
+        >
+          {exporting ? `Exporting ${exportFormat?.toUpperCase()}...` : "Export Report"}
+        </Button>
+        <Menu
+          anchorEl={anchorEl}
+          open={open}
+          onClose={handleClose}
+          transformOrigin={{ horizontal: 'right', vertical: 'top' }}
+          anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
+          PaperProps={{
+            sx: {
+              mt: 1,
+              boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
+              borderRadius: "8px"
+            }
+          }}
+        >
+          <MenuItem
+            onClick={(e) => handleExportClick('pdf', e)}
+            sx={{ gap: 1, py: 1.5 }}
+          >
+            <PictureAsPdfIcon sx={{ color: '#f44336' }} />
+            Export as PDF
+          </MenuItem>
+          <MenuItem
+            onClick={(e) => handleExportClick('xlsx', e)}
+            sx={{ gap: 1, py: 1.5 }}
+          >
+            <TableChartIcon sx={{ color: '#4caf50' }} />
+            Export as Excel
+          </MenuItem>
+          <MenuItem
+            onClick={(e) => handleExportClick('csv', e)}
+            sx={{ gap: 1, py: 1.5 }}
+          >
+            <DescriptionIcon sx={{ color: '#2196f3' }} />
+            Export as CSV
+          </MenuItem>
+        </Menu>
+      </>
     );
   };
 
@@ -1026,7 +1461,7 @@ function App() {
                     />
                   </Box>
 
-                  {/* INPUT MODE TOGGLE */}
+                  {/* INPUT MODE TOGGLE - NOW WITH 3 OPTIONS */}
                   <Box mt={2} sx={{ display: "flex", alignItems: "center", gap: 2 }}>
                     <Typography color="white" fontSize={14}>Input Mode:</Typography>
                     <ToggleButtonGroup
@@ -1042,6 +1477,10 @@ function App() {
                       <ToggleButton value="screenshot" sx={{ color: "white", "&.Mui-selected": { background: "rgba(156,39,176,0.5)", color: "white" } }}>
                         <CameraAltIcon sx={{ mr: 0.5 }} fontSize="small" />
                         Screenshot
+                      </ToggleButton>
+                      <ToggleButton value="upload" sx={{ color: "white", "&.Mui-selected": { background: "rgba(255,152,0,0.5)", color: "white" } }}>
+                        <FolderIcon sx={{ mr: 0.5 }} fontSize="small" />
+                        Upload File
                       </ToggleButton>
                     </ToggleButtonGroup>
                   </Box>
@@ -1128,7 +1567,68 @@ function App() {
                     </Box>
                   )}
 
-                  {/* TEST DATA (collapsed accordion - same for both modes) */}
+                  {/* UPLOAD MODE - NEW */}
+                  {inputMode === "upload" && (
+                    <Box mt={2}>
+                      <Box
+                        sx={{
+                          border: "2px dashed rgba(255,255,255,0.4)",
+                          borderRadius: "12px",
+                          p: 4,
+                          textAlign: "center",
+                          background: "rgba(255,255,255,0.05)",
+                          cursor: "pointer",
+                          transition: "all 0.3s ease",
+                          "&:hover": { background: "rgba(255,255,255,0.1)", borderColor: "rgba(255,255,255,0.6)" },
+                        }}
+                        component="label"
+                      >
+                        <FolderIcon sx={{ fontSize: 48, color: "rgba(255,255,255,0.6)", mb: 1 }} />
+                        <Typography color="white" variant="h6">Upload Test Cases File</Typography>
+                        <Typography color="rgba(255,255,255,0.7)" fontSize={13} mt={1}>
+                          Supported formats: CSV, XLSX, DOCX
+                        </Typography>
+                        <Typography color="rgba(255,255,255,0.5)" fontSize={11} mt={0.5}>
+                          For regression testing - upload your existing test cases
+                        </Typography>
+                        <input
+                          type="file"
+                          hidden
+                          accept=".csv,.xlsx,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/csv"
+                          onChange={handleTestcaseFileChange}
+                        />
+                      </Box>
+
+                      {uploadingTestcases && (
+                        <Box mt={2}>
+                          <LinearProgress
+                            variant="determinate"
+                            value={testcaseUploadProgress}
+                            sx={{ height: 8, borderRadius: 5, background: "rgba(255,255,255,0.2)", "& .MuiLinearProgress-bar": { background: "linear-gradient(90deg, #ff9800, #ffc107)" } }}
+                          />
+                          <Typography fontSize={12} color="white" mt={0.5}>
+                            Uploading and parsing... {testcaseUploadProgress}%
+                          </Typography>
+                        </Box>
+                      )}
+
+                      {/* File Format Help */}
+                      <Box mt={2} sx={{ background: "rgba(255,255,255,0.08)", borderRadius: "12px", p: 2 }}>
+                        <Typography color="white" fontSize={13} fontWeight={600} mb={1}>
+                          📋 Supported File Formats:
+                        </Typography>
+                        <Typography color="rgba(255,255,255,0.7)" fontSize={12} component="div">
+                          <strong>CSV:</strong> Columns: Test ID, Scenario, Steps (use | to separate steps), Expected Result, Priority, Category
+                          <br />
+                          <strong>XLSX:</strong> Same columns as CSV in spreadsheet format
+                          <br />
+                          <strong>DOCX:</strong> Format: TC_001: Title<br />Step 1<br />Step 2<br />(blank line)<br />TC_002: ...
+                        </Typography>
+                      </Box>
+                    </Box>
+                  )}
+
+                  {/* TEST DATA (collapsed accordion - same for all modes) */}
                   <Box mt={2} sx={{ background: "rgba(255,255,255,0.08)", borderRadius: "12px", overflow: "hidden" }}>
                     <Box
                       onClick={() => document.getElementById("test-data-content").classList.toggle("hidden")}
@@ -1148,12 +1648,12 @@ function App() {
                   <Box mt={2} display="flex" gap={2} flexWrap="wrap" alignItems="center">
                     <Button
                       variant="contained"
-                      startIcon={inputMode === "screenshot" ? <CameraAltIcon /> : <BoltIcon />}
+                      startIcon={inputMode === "screenshot" ? <CameraAltIcon /> : inputMode === "upload" ? <FolderIcon /> : <BoltIcon />}
                       onClick={generateTestCases}
                       sx={primaryBtn}
                       disabled={loading || (inputMode === "screenshot" && !screenshotFile)}
                     >
-                      {loading ? "Generating..." : inputMode === "screenshot" ? "Generate from Screenshot" : "Generate"}
+                      {loading ? "Generating..." : inputMode === "screenshot" ? "Generate from Screenshot" : inputMode === "upload" ? "Upload not needed - use file picker above" : "Generate"}
                     </Button>
                     <Button variant="contained" startIcon={<CleaningServicesIcon />} onClick={clearAll} sx={secondaryBtn}>Clear</Button>
 
@@ -1214,17 +1714,32 @@ function App() {
                     </Box>
                   </Dialog>
 
+                  {/* SHOW SKELETON WHILE LOADING */}
+                  {loading && <TestCaseSkeleton />}
+
                   {/* GENERATED TEST CASES TABLE */}
                   {!loading && testcases.length > 0 && (
                     <Box mt={3}>
                       <SectionHeader
-                        title="📋 Generated Test Cases"
+                        title={`📋 ${testcaseSource === "uploaded" ? "Uploaded" : "Generated"} Test Cases`}
                         count={filtered.length}
                         isOpen={showTestcases}
                         onToggle={() => setShowTestcases((p) => !p)}
-                        extra={editedIds.size > 0 && (
-                          <Chip icon={<EditIcon sx={{ color: "white !important" }} />} label={`${editedIds.size} edited`} size="small" sx={{ background: "rgba(255,193,7,0.4)", color: "white" }} />
-                        )}
+                        extra={
+                          <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                            {testcaseSource && (
+                              <Chip
+                                icon={testcaseSource === "generated" ? <BoltIcon sx={{ color: "white !important", fontSize: 14 }} /> : <FolderIcon sx={{ color: "white !important", fontSize: 14 }} />}
+                                label={testcaseSource === "generated" ? "AI Generated" : "Uploaded from File"}
+                                size="small"
+                                sx={{ background: testcaseSource === "generated" ? "rgba(66,165,245,0.4)" : "rgba(255,152,0,0.4)", color: "white" }}
+                              />
+                            )}
+                            {editedIds.size > 0 && (
+                              <Chip icon={<EditIcon sx={{ color: "white !important" }} />} label={`${editedIds.size} edited`} size="small" sx={{ background: "rgba(255,193,7,0.4)", color: "white" }} />
+                            )}
+                          </Box>
+                        }
                       />
 
                       <Collapse in={showTestcases} timeout={300} unmountOnExit>
@@ -1314,7 +1829,7 @@ function App() {
                         isOpen={showResults}
                         onToggle={() => setShowResults((p) => !p)}
                         extra={
-                          <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                          <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
                             <Chip label={`Pass: ${executionResults.filter((r) => r.status === "Pass").length}`} size="small" sx={{ background: "rgba(76,175,80,0.4)", color: "white", fontWeight: 600 }} />
                             <Chip label={`Fail: ${executionResults.filter((r) => r.status === "Fail").length}`} size="small" sx={{ background: "rgba(244,67,54,0.4)", color: "white", fontWeight: 600 }} />
                             {executionResults.filter((r) => r.status === "Skipped").length > 0 && (
@@ -1328,6 +1843,7 @@ function App() {
                                 sx={{ background: "rgba(156,39,176,0.5)", color: "white", fontWeight: 600 }}
                               />
                             )}
+                            <ExportMenu onExport={exportReport} disabled={exporting} />
                           </Box>
                         }
                       />
@@ -1348,7 +1864,7 @@ function App() {
                             {executionResults.map((r, i) => {
                               const rowBg = r.status === "Fail" ? "rgba(255,0,0,0.15)"
                                 : r.status === "Skipped" ? "rgba(158,158,158,0.15)"
-                                : r.healed ? "rgba(156,39,176,0.12)" : "transparent";
+                                  : r.healed ? "rgba(156,39,176,0.12)" : "transparent";
                               const statusColor = r.status === "Pass" ? "#4caf50"
                                 : r.status === "Fail" ? "#f44336" : "#bdbdbd";
                               return (
@@ -1378,7 +1894,7 @@ function App() {
                                   <td style={tdStyle}>
                                     {r.status === "Fail" ? <span style={{ color: "#ff8a80", fontSize: 13 }}>{r.error}</span>
                                       : r.status === "Skipped" ? <span style={{ color: "#bdbdbd", fontSize: 13, fontStyle: "italic" }}>{r.error}</span>
-                                      : <span style={{ color: "#81c784" }}>No issues{r.healed && " (healed)"}</span>}
+                                        : <span style={{ color: "#81c784" }}>No issues{r.healed && " (healed)"}</span>}
                                   </td>
                                   <td style={tdStyle}>
                                     {r.status === "Fail" && (
@@ -1584,6 +2100,15 @@ function App() {
                             <MuiTooltip title="View results">
                               <IconButton size="small" onClick={() => viewExecution(e.id)} sx={{ color: "#42a5f5" }}>
                                 <VisibilityIcon fontSize="small" />
+                              </IconButton>
+                            </MuiTooltip>
+                            <MuiTooltip title="Export Report">
+                              <IconButton
+                                size="small"
+                                onClick={(event) => handleExportMenuOpen(event, e.id)}
+                                sx={{ color: "#4caf50" }}
+                              >
+                                <FileDownloadIcon fontSize="small" />
                               </IconButton>
                             </MuiTooltip>
                             <MuiTooltip title="Delete">
@@ -1804,6 +2329,53 @@ function App() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* ============ EXPORT MENU DIALOG ============ */}
+      <Menu
+        anchorEl={exportMenuAnchor}
+        open={Boolean(exportMenuAnchor)}
+        onClose={handleExportMenuClose}
+        transformOrigin={{ horizontal: 'right', vertical: 'top' }}
+        anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
+        PaperProps={{
+          sx: {
+            mt: 1,
+            boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
+            borderRadius: "8px"
+          }
+        }}
+      >
+        <MenuItem
+          onClick={() => {
+            exportHistoricalReport(exportMenuExecId, 'pdf');
+            handleExportMenuClose();
+          }}
+          sx={{ gap: 1, py: 1.5 }}
+        >
+          <PictureAsPdfIcon sx={{ color: '#f44336' }} />
+          Export as PDF
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            exportHistoricalReport(exportMenuExecId, 'xlsx');
+            handleExportMenuClose();
+          }}
+          sx={{ gap: 1, py: 1.5 }}
+        >
+          <TableChartIcon sx={{ color: '#4caf50' }} />
+          Export as Excel
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            exportHistoricalReport(exportMenuExecId, 'csv');
+            handleExportMenuClose();
+          }}
+          sx={{ gap: 1, py: 1.5 }}
+        >
+          <DescriptionIcon sx={{ color: '#2196f3' }} />
+          Export as CSV
+        </MenuItem>
+      </Menu>
     </Box>
   );
 }

@@ -1,13 +1,10 @@
-// =============================================================
 // storage.js — SQLite persistence for Test Suites & History
-// =============================================================
 // Handles all DB operations: create / list / load / delete suites,
 // save executions, list history, fetch a specific past run.
-//
+
 // Schema:
 //   suites      — saved test case collections
 //   executions  — every test run, linked to a suite (or null for ad-hoc runs)
-// =============================================================
 
 const Database = require("better-sqlite3");
 const path = require("path");
@@ -52,9 +49,7 @@ db.exec(`
 const newId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const now = () => Date.now();
 
-// =================================================================
 // SUITES
-// =================================================================
 
 function createSuite({ name, description = "", appUrl = "", testData = {}, testcases = [] }) {
     const id = newId("suite");
@@ -132,9 +127,7 @@ function deleteSuite(id) {
     return { ok: true };
 }
 
-// =================================================================
 // EXECUTIONS / HISTORY
-// =================================================================
 
 function saveExecution({ suiteId = null, suiteName = "Ad-hoc Run", appUrl = "", results = [] }) {
     const id = newId("exec");
@@ -197,9 +190,7 @@ function deleteExecution(id) {
     return { ok: true };
 }
 
-// =================================================================
 // Utilities
-// =================================================================
 
 function computeSummary(results) {
     const total = results.length;
