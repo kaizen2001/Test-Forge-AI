@@ -1,0 +1,77 @@
+/*
+CSS Variables
+ */
+
+:root {
+    /* BRAND COLORS */
+    --color-primary-blue: #1E3C72;
+    --color-primary-blue-light: #4A7EBB;
+    --color-primary-blue-dark: #0F1E3A;
+
+    --color-primary-purple: #534AB7;
+    --color-primary-purple-light: #7B68EE;
+
+    --color-primary-teal: #00897b;
+    --color-primary-teal-light: #26a69a;
+    --color-primary-teal-dark: #00695c;
+
+    /* STATUS COLORS */
+    --color-success: #4caf50;
+    --color-success-light: #66bb6a;
+
+    --color-error: #f44336;
+    --color-error-light: #e57373;
+
+    --color-warning: #ff9800;
+    --color-warning-light: #ffb74d;
+
+    --color-info: #2196f3;
+    --color-healed: #9c27b0;
+
+    /* BACKGROUND COLORS */
+    --bg-primary: #1a1a2e;
+    --bg-secondary: #16213e;
+    --bg-tertiary: #0f1e3a;
+    --bg-card: rgba(255, 255, 255, 0.05);
+    --bg-card-hover: rgba(255, 255, 255, 0.08);
+    --bg-input: rgba(255, 255, 255, 0.95);
+    --bg-edited: #fff3e0;
+
+    /* TEXT COLORS */
+    --text-primary: #ffffff;
+    --text-secondary: rgba(255, 255, 255, 0.7);
+    --text-tertiary: rgba(255, 255, 255, 0.4);
+    --text-dark: #222222;
+
+    /* SPACING SCALE */
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 16px;
+    --spacing-lg: 24px;
+    --spacing-xl: 32px;
+    --spacing-2xl: 48px;
+
+    /* BORDER RADIUS */
+    --radius-xs: 4px;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-pill: 25px;
+
+    /* SHADOWS */
+    --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.1);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.15);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.2);
+    --shadow-xl: 0 12px 32px rgba(0, 0, 0, 0.25);
+
+    /* TRANSITIONS */
+    --transition-fast: 0.15s ease;
+    --transition-base: 0.2s ease;
+    --transition-slow: 0.3s ease;
+
+    /* GRADIENTS */
+    --gradient-primary: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f1e3a 100%);
+    --gradient-button: linear-gradient(45deg, #00897b, #26a69a);
+    --gradient-button-hover: linear-gradient(45deg, #00695c, #00897b);
+}

@@ -1,0 +1,23 @@
+.editable-cell {
+  min-height: 24px;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-base);
+}
+
+.editable-cell:hover {
+  background: rgba(255, 255, 255, 0.15);
+  outline: 1px dashed rgba(255, 255, 255, 0.4);
+}
+
+.editable-cell__placeholder {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.editable-cell-input .MuiOutlinedInput-root {
+  background: var(--bg-input);
+  color: var(--text-dark);
+  font-size: 13px;
+}

@@ -42,7 +42,7 @@ const activeConnections = new Map(); // runId -> socket
 
 io.on("connection", (socket) => {
     console.log("✅ Client connected:", socket.id);
-    
+
     socket.on("register_run", (runId) => {
         activeConnections.set(runId, socket);
         console.log(`🔗 Run ${runId} registered to socket ${socket.id}`);
@@ -74,9 +74,9 @@ const normalizeTCs = (arr) =>
         title: tc.title || tc.testCaseDescription || tc.scenario || tc.name || tc.description || "No scenario provided",
         testSteps: Array.isArray(tc.testSteps) ? tc.testSteps
             : Array.isArray(tc.steps) ? tc.steps
-            : typeof tc.testSteps === "string" ? [tc.testSteps]
-            : typeof tc.steps === "string" ? [tc.steps]
-            : [],
+                : typeof tc.testSteps === "string" ? [tc.testSteps]
+                    : typeof tc.steps === "string" ? [tc.steps]
+                        : [],
         expectedResult: tc.expectedResult || tc.expected || tc.expected_result || tc.expectedBehavior || "No expected result provided",
         priority: tc.priority || "Medium",
         category: tc.category || "Functional",
@@ -98,86 +98,116 @@ app.post("/generate-testcases", async (req, res) => {
         const prompt = `You are a SENIOR QA ENGINEER generating PRODUCTION-READY, EXECUTABLE test cases.
 
 APPLICATION URL: ${appUrl}
-REQUIREMENTS:
+
+REQUIREMENTS DOCUMENT:
 ${requirement}
 ${testDataSection}
 
+⚠️ CRITICAL INSTRUCTION - FULL DOCUMENT COVERAGE:
+The requirements document may contain MULTIPLE screens, modules, or tables. You MUST:
+1. Identify ALL screens/modules mentioned in the document
+2. Identify ALL fields/controls from ALL tables
+3. Generate test cases for EVERY screen and EVERY field mentioned
+4. DO NOT focus only on the first screen - cover the ENTIRE document
+
+DOCUMENT ANALYSIS CHECKLIST:
+□ Check for multiple screens (e.g., "Login Screen", "Intelligence Screen", "Dashboard", etc.)
+□ Check for multiple tables (Table 1, Table 2, Table 3, etc.)
+□ Count total fields across ALL tables
+□ Ensure test cases cover fields from ALL tables, not just the first one
+
 CRITICAL QUALITY STANDARDS:
-1. Element descriptions MUST match ACTUAL page elements (exact labels, placeholders, button text)
+1. Element descriptions MUST match ACTUAL field names from the requirements document
 2. Steps MUST be SPECIFIC and ACTIONABLE — NO vague instructions
 3. Expected results MUST be OBSERVABLE and VERIFIABLE
-4. Use REAL button/field labels from the application, not generic ones
-5. For login flows: use provided test data credentials
+4. Use EXACT field/button labels from the requirements document
+5. Cover ALL fields from ALL tables in the document
 
 CRITICAL RULES FOR TEST STEPS:
 1. **NUMBERED FORMAT**: Each step in testSteps array must be numbered like "1. Step description", "2. Next step", etc.
 2. **BE SPECIFIC ABOUT VALUES**: 
-   - For NEGATIVE tests (invalid/wrong credentials): Say "Enter INVALID username" or "Enter wrong password"
-   - For POSITIVE tests (valid credentials): Say "Enter valid username" or use specific value from test data
-   - For EMPTY field tests: Say "Leave Username field empty"
+   - For NEGATIVE tests (invalid/wrong data): Say "Enter INVALID [field name]" or "Enter wrong [data]"
+   - For POSITIVE tests (valid data): Say "Enter valid [field name]" or use specific value from test data
+   - For EMPTY field tests: Say "Leave [Field Name] field empty"
+   - For dropdown tests: Say "Select valid option from [Dropdown Name]" or "Leave [Dropdown Name] unselected"
 3. **ONE STEP PER ACTION**: Each step should be a separate numbered item in the array
 
 EXAMPLES OF GOOD TEST STEPS:
-Positive Test:
+
+Positive Test (Form with Multiple Fields):
 [
-  "1. Navigate to application",
-  "2. Enter valid username in Username field",
-  "3. Enter valid password in Password field",
-  "4. Click Login button",
-  "5. Verify user is logged in successfully"
+  "1. Navigate to Intelligence screen",
+  "2. Enter valid text in 'Report relates to' field",
+  "3. Enter valid text in 'Activity / Intel about' field",
+  "4. Select valid option from 'Priority Assessment' dropdown",
+  "5. Click Submit button",
+  "6. Verify form is submitted successfully"
 ]
 
-Negative Test (Invalid Credentials):
+Negative Test (Empty Mandatory Field):
 [
-  "1. Navigate to application",
-  "2. Enter INVALID username in Username field",
-  "3. Enter INVALID password in Password field",
-  "4. Click Login button",
-  "5. Verify error message is displayed"
+  "1. Navigate to Intelligence screen",
+  "2. Leave 'Report relates to' field empty",
+  "3. Enter valid text in other mandatory fields",
+  "4. Click Submit button",
+  "5. Verify validation error for 'Report relates to' field"
 ]
 
-Negative Test (Empty Field):
+Boundary Test (Max Length Validation):
 [
-  "1. Navigate to application",
-  "2. Leave Username field empty",
-  "3. Enter password in Password field",
-  "4. Click Login button",
-  "5. Verify validation error is shown"
+  "1. Navigate to Intelligence screen",
+  "2. Enter 201 characters in 'Report relates to' field (max is 200)",
+  "3. Verify field shows validation error or truncates input"
+]
+
+Date Validation Test:
+[
+  "1. Navigate to Intelligence screen",
+  "2. Enter future date in 'Event From' field",
+  "3. Enter past date in 'Event To' field (violates From <= To rule)",
+  "4. Click Submit button",
+  "5. Verify validation error for date range"
 ]
 
 UNIVERSAL VERIFICATION STRATEGY:
-⚠️ MOST IMPORTANT: Use URL changes to verify success/failure
+⚠️ MOST IMPORTANT: Use URL changes or visible elements to verify success/failure
 
-1. LOGIN SUCCESS: Check URL changed (contains new path segment like "dashboard", "home", "main")
-   ✅ { "action": "assert_url", "target": "Dashboard loaded", "value": "dashboard" }
+1. SUCCESS: Check URL changed OR success message visible
+   ✅ { "action": "assert_url", "target": "Form submitted", "value": "success" }
+   ✅ { "action": "assert_visible", "target": "Success message", "value": "" }
 
-2. LOGIN FAILURE: Check URL did NOT change (still on login page)
-   ✅ { "action": "assert_url", "target": "Stayed on login page", "value": "login" }
-   OR check domain if login page is base URL
-
-3. FORM VALIDATION ERRORS:
-   - Verify error occurred: assert_url → URL stayed same (no navigation)
-   
-4. LOGOUT:
-   - Verify logged out: assert_url → URL returned to login page
-
-CRITICAL URL RULES:
-- If error occurs, user stays on SAME URL (no navigation)
-- If success, user navigates to NEW URL (different path)
-- Use meaningful URL segments for verification
+2. FAILURE/VALIDATION: Check URL did NOT change OR error message visible
+   ✅ { "action": "assert_url", "target": "Stayed on form page", "value": "intelligence" }
+   ✅ { "action": "assert_visible", "target": "Validation error message", "value": "" }
 
 BUTTON/FIELD TARGETING:
-1. Buttons: Use exact visible text: "Login", "Sign in", "Submit", "Save"
-2. Input fields: Use placeholder text or labels: "Email", "Password", "Username"
-3. Links: Use exact link text
+1. Buttons: Use exact visible text from requirements: "Login", "Submit", "Save", "Cancel"
+2. Input fields: Use exact field names from requirements: "User Name", "Report relates to", etc.
+3. Dropdowns: Use exact field names: "Priority Assessment", "NIM Level", etc.
 
 TEST COVERAGE REQUIREMENTS:
-Generate 15-25 test cases covering:
-- ✅ Positive scenarios (happy path, valid inputs)
-- ❌ Negative scenarios (invalid credentials, wrong data)
-- 🔢 Boundary cases (empty fields, special characters)
-- 🎨 UI validation (error messages visible, required fields)
-- 🔗 End-to-end flows (login → action → logout)
+Generate 15-20 test cases covering ALL screens in the document:
+
+FOR EACH SCREEN:
+- ✅ Positive scenarios (all mandatory fields filled correctly)
+- ❌ Negative scenarios (invalid data, missing required fields)
+- 🔢 Boundary cases (empty fields, max length, min length)
+- 🎨 Validation rules (match document's "Validation/Business Rule" column)
+- 🔗 Dropdown selection tests (for all dropdown fields)
+- 📅 Date/DateTime tests (for date fields, including range validation)
+
+EXAMPLE DISTRIBUTION (adjust based on actual document):
+- Login Screen (if present): 5-7 test cases
+- Intelligence Screen (if present): 8-12 test cases (focus on critical mandatory fields)
+- Other screens (if present): proportional coverage
+
+VALIDATION RULES TO TEST:
+Parse the requirements document to identify:
+- Mandatory fields (test empty field validation)
+- Max length constraints (test boundary values)
+- Format constraints (alphanumeric, date format, etc.)
+- Business rules (date ranges, dependencies between fields)
+- Dropdown constraints (test selection and empty state)
 
 SCHEMA FOR EACH TEST CASE:
 {
@@ -213,41 +243,70 @@ RULES FOR structuredSteps:
 4. testSteps and structuredSteps MUST have same count and match each other
 5. For negative tests with invalid data, use "invalid_username" or "wrong_password" as values
 
-OUTPUT: Return ONLY a valid JSON array. No markdown. No code blocks. No explanation.`;
+⚠️ FINAL REMINDER - DO NOT SKIP SCREENS:
+Before generating output, verify you have test cases for:
+□ ALL screens mentioned in the document
+□ ALL fields from ALL tables
+□ Both Login AND Intelligence screens (if both are in the document)
+□ All 11 INT_ fields if Intelligence screen is present
+□ All validation rules mentioned in "Validation/Business Rule" column
+
+OUTPUT: Return a JSON object with a "testcases" key containing an array of 15-20 test cases.
+
+Format: {"testcases": [array of test case objects]}
+
+CRITICAL JSON REQUIREMENTS:
+- Return a valid JSON object (not just an array)
+- Use "testcases" as the key
+- Ensure all quotes are properly closed
+- Ensure all brackets are properly matched
+- No text before or after the JSON
+- No markdown formatting`;
 
         const response = await openai.chat.completions.create({
             model: "gpt-4o-mini",
             messages: [{ role: "user", content: prompt }],
-            max_tokens: 10000,
+            max_tokens: 16000,
             temperature: 0.3,
+            response_format: { type: "json_object" },  // Force valid JSON output
         });
 
         console.log("✅ Test generation completed, finish reason:", response.choices[0].finish_reason);
 
         let raw = response.choices[0].message.content;
-        raw = raw.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
 
+        // Log first 500 chars of raw response for debugging
+        console.log("📝 AI Response Preview (first 500 chars):", raw.substring(0, 500));
+        console.log("📏 Total Response Length:", raw.length);
+
+        // With JSON mode, response should already be valid JSON
         let parsed;
         try {
-            parsed = JSON.parse(raw);
-            if (!Array.isArray(parsed)) {
-                const key = Object.keys(parsed).find((k) => Array.isArray(parsed[k]));
-                parsed = key ? parsed[key] : [];
-            }
-            parsed = normalizeTCs(parsed);
-        } catch (e) {
-            const match = raw.match(/\[.*\]/s);
-            if (match) {
-                try {
-                    parsed = normalizeTCs(JSON.parse(match[0]));
-                } catch {
-                    return res.json({ error: "Could not parse AI response", raw });
-                }
-            } else {
-                return res.json({ error: "Invalid JSON from AI", raw });
-            }
-        }
+            const jsonResponse = JSON.parse(raw);
 
+            // Extract testcases array from response
+            if (jsonResponse.testcases && Array.isArray(jsonResponse.testcases)) {
+                parsed = normalizeTCs(jsonResponse.testcases);
+            } else if (Array.isArray(jsonResponse)) {
+                // Fallback: if it's already an array
+                parsed = normalizeTCs(jsonResponse);
+            } else {
+                // Search for any array in the response
+                const key = Object.keys(jsonResponse).find((k) => Array.isArray(jsonResponse[k]));
+                parsed = key ? normalizeTCs(jsonResponse[key]) : [];
+            }
+
+            console.log(`✅ Successfully parsed ${parsed.length} test cases`);
+        } catch (e) {
+            console.error("❌ JSON Parse Error:", e.message);
+            console.log("🔍 Raw response that failed to parse:", raw.substring(0, 1000));
+
+            return res.status(500).json({
+                error: "Could not parse AI response",
+                details: "AI returned malformed JSON despite JSON mode",
+                preview: raw.substring(0, 500)
+            });
+        }
         res.json({ result: parsed });
     } catch (error) {
         console.error("❌ Test generation error:", error);
@@ -392,7 +451,7 @@ OUTPUT: Single JSON object (the updated test case). No explanation.`;
 
         const updated = JSON.parse(raw);
         console.log(`✅ ${testCase.testCaseId} refined successfully`);
-        
+
         res.json({ updatedTestCase: updated });
     } catch (error) {
         console.error("❌ Refinement error:", error);
@@ -555,10 +614,6 @@ app.post("/risk-analysis", async (req, res) => {
 // ==============================
 // UPLOAD TEST CASES FILE
 // ==============================
-// ADD THIS CODE IN server.js RIGHT BEFORE THE LINE:
-// "// =============================="
-// "// FILE UPLOAD - EXTRACT TEXT"
-// (Around line 552)
 
 app.post("/upload-testcases", upload.single("file"), async (req, res) => {
     try {
@@ -571,7 +626,7 @@ app.post("/upload-testcases", upload.single("file"), async (req, res) => {
         if (mimetype === "text/csv" || originalname.endsWith(".csv")) {
             const csvText = buffer.toString("utf-8");
             const lines = csvText.split("\n").filter(line => line.trim());
-            
+
             if (lines.length < 2) {
                 return res.status(400).json({ error: "CSV file is empty or has no data rows" });
             }
@@ -580,25 +635,25 @@ app.post("/upload-testcases", upload.single("file"), async (req, res) => {
             let i = 1;
             while (i < lines.length) {
                 let line = lines[i];
-                
+
                 // Handle quoted values that span multiple lines
                 let quoteCount = (line.match(/"/g) || []).length;
-                
+
                 // If odd number of quotes, this is a multi-line value
                 while (quoteCount % 2 !== 0 && i + 1 < lines.length) {
                     i++;
                     line += "\n" + lines[i];
                     quoteCount = (line.match(/"/g) || []).length;
                 }
-                
+
                 // Parse CSV line with proper quote handling
                 const cols = [];
                 let current = "";
                 let inQuotes = false;
-                
+
                 for (let j = 0; j < line.length; j++) {
                     const char = line[j];
-                    
+
                     if (char === '"') {
                         inQuotes = !inQuotes;
                     } else if (char === ',' && !inQuotes) {
@@ -609,12 +664,12 @@ app.post("/upload-testcases", upload.single("file"), async (req, res) => {
                     }
                 }
                 cols.push(current.trim());
-                
+
                 if (cols.length >= 4) {
-                    // Split steps by newlines (your CSV format)
+                    // Split steps by newlines (CSV format)
                     const stepsText = cols[2] || "";
                     const steps = stepsText.split("\n").map(s => s.trim()).filter(s => s);
-                    
+
                     testcases.push({
                         testCaseId: cols[0] || `TC_${String(testcases.length + 1).padStart(3, "0")}`,
                         title: cols[1] || "No title",
@@ -625,7 +680,7 @@ app.post("/upload-testcases", upload.single("file"), async (req, res) => {
                         structuredSteps: [],
                     });
                 }
-                
+
                 i++;
             }
         }
@@ -640,7 +695,7 @@ app.post("/upload-testcases", upload.single("file"), async (req, res) => {
             data.forEach((row, i) => {
                 const steps = row.Steps || row.testSteps || row["Test Steps"] || "";
                 const stepsArray = typeof steps === "string" ? steps.split("\n").filter(s => s.trim()) : [];
-                
+
                 testcases.push({
                     testCaseId: row.ID || row.TestCaseId || row["Test ID"] || `TC_${String(i + 1).padStart(3, "0")}`,
                     title: row.Title || row.Scenario || row.Description || "No title",
@@ -656,15 +711,15 @@ app.post("/upload-testcases", upload.single("file"), async (req, res) => {
         else if (mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || originalname.endsWith(".docx")) {
             const result = await mammoth.extractRawText({ buffer });
             const text = result.value;
-            
+
             const tcMatches = text.matchAll(/TC_(\d+):\s*(.+?)(?=TC_\d+:|$)/gs);
             let tcNum = 1;
-            
+
             for (const match of tcMatches) {
                 const tcId = `TC_${String(tcNum).padStart(3, "0")}`;
                 const content = match[2].trim();
                 const lines = content.split("\n").map(l => l.trim()).filter(l => l);
-                
+
                 if (lines.length > 0) {
                     testcases.push({
                         testCaseId: tcId,
@@ -688,7 +743,7 @@ app.post("/upload-testcases", upload.single("file"), async (req, res) => {
         }
 
         console.log(`📄 Parsing ${testcases.length} test cases from uploaded file...`);
-        
+
         // Generate structuredSteps from testSteps using AI
         for (const tc of testcases) {
             if (tc.testSteps.length > 0 && tc.structuredSteps.length === 0) {
@@ -747,8 +802,25 @@ app.post("/extract-file", upload.single("file"), async (req, res) => {
         let extractedText = "";
 
         if (mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || originalname.endsWith(".docx")) {
-            const result = await mammoth.extractRawText({ buffer });
-            extractedText = result.value;
+            // ✅ FIX: Use convertToHtml instead of extractRawText to preserve tables
+            const result = await mammoth.convertToHtml({ buffer });
+            const htmlContent = result.value;
+
+            // Convert HTML to plain text while preserving table structure
+            extractedText = htmlContent
+                .replace(/<table[^>]*>/gi, '\n--- Table ---\n')
+                .replace(/<\/table>/gi, '\n--- End Table ---\n')
+                .replace(/<tr[^>]*>/gi, '')
+                .replace(/<\/tr>/gi, '\n')
+                .replace(/<td[^>]*>/gi, '')
+                .replace(/<\/td>/gi, ' | ')
+                .replace(/<th[^>]*>/gi, '')
+                .replace(/<\/th>/gi, ' | ')
+                .replace(/<p[^>]*>/gi, '')
+                .replace(/<\/p>/gi, '\n')
+                .replace(/<[^>]+>/g, '') // Remove remaining HTML tags
+                .replace(/\n\s*\n/g, '\n') // Remove extra blank lines
+                .trim();
         } else if (mimetype === "application/pdf" || originalname.endsWith(".pdf")) {
             const result = await pdfParse(buffer);
             extractedText = result.text;
@@ -760,6 +832,7 @@ app.post("/extract-file", upload.single("file"), async (req, res) => {
             return res.status(400).json({ error: "Could not extract text from file." });
         }
 
+        console.log(`✅ Extracted ${extractedText.length} characters from ${originalname}`);
         res.json({ text: extractedText.trim() });
     } catch (err) {
         console.error("File extraction error:", err);
@@ -797,13 +870,13 @@ async function snapshotPage(page) {
             if (placeholder) return placeholder.trim();
 
             const text = (el.innerText || el.textContent || "").trim();
-            
+
             // For links/buttons with minimal or no text, build smart label from className/href
             if (text.length < 3 && (el.tagName === "A" || el.tagName === "BUTTON")) {
                 const className = el.className || "";
                 const href = el.href || "";
                 const smartLabels = [];
-                
+
                 // Check for common icon patterns in className
                 if (className.includes("cart") || className.includes("basket") || href.includes("/cart")) {
                     smartLabels.push("Cart");
@@ -820,11 +893,11 @@ async function snapshotPage(page) {
                 if (className.includes("close") || className.includes("exit")) {
                     smartLabels.push("Close");
                 }
-                
+
                 if (smartLabels.length > 0) {
                     return smartLabels.join(" ") + " icon";
                 }
-                
+
                 // Fallback: use the small text if present
                 if (text) return text.substring(0, 100);
             } else if (text) {
@@ -1033,13 +1106,13 @@ async function performAction(locator, action, value, target) {
             } catch (e) {
                 text = "";
             }
-            
+
             const expectedText = (value || "").toLowerCase();
             const actualText = text.toLowerCase().trim();
-            
+
             // Strategy 1: Direct textContent (current element only)
             let found = actualText.includes(expectedText);
-            
+
             // Strategy 2: Try innerText (includes visible text from children)
             if (!found) {
                 try {
@@ -1047,7 +1120,7 @@ async function performAction(locator, action, value, target) {
                     found = innerText.toLowerCase().includes(expectedText);
                 } catch (e) { /* ignore */ }
             }
-            
+
             // Strategy 3: Try allTextContents (all text nodes)
             if (!found) {
                 try {
@@ -1055,7 +1128,7 @@ async function performAction(locator, action, value, target) {
                     found = allTexts.join(" ").toLowerCase().includes(expectedText);
                 } catch (e) { /* ignore */ }
             }
-            
+
             if (!found) {
                 throw new Error(`Assertion failed: expected text "${value}" not found in "${text}"`);
             }
@@ -1072,7 +1145,7 @@ async function executeStep(page, step, appUrl, options = {}) {
         case "navigate": {
             let url;
             if (value && value.startsWith("/")) {
-                // Relative URL path provided in value field (e.g., "/cart.html")
+                // Relative URL path provided in value field 
                 const currentUrl = new URL(page.url());
                 url = `${currentUrl.origin}${value}`;
             } else if (target && target.startsWith("http")) {
@@ -1173,11 +1246,11 @@ async function tryHeal(page, action, target, value, snapshot, previousFailure) {
         console.log("🩹 [self-heal] assert_text failed, trying assert_visible fallback...");
         try {
             const aiPick = await findElementWithAI(snapshot, "assert_visible", target, "");
-            
+
             if (aiPick.idx !== -1 && aiPick.idx < snapshot.elements.length) {
                 const chosen = snapshot.elements[aiPick.idx];
                 const locator = await buildLocator(page, chosen);
-                
+
                 if (await locator.isVisible()) {
                     return {
                         ok: true,
@@ -1196,18 +1269,18 @@ async function tryHeal(page, action, target, value, snapshot, previousFailure) {
             console.log("🩹 [self-heal] assert_visible fallback failed");
         }
     }
-    
+
     // SMART HEALING STRATEGY 2: For ANY verification that fails, check if page state is correct via URL
     // This is the universal fallback that works on any website
     if ((action === "assert_visible" || action === "assert_text") && !target.toLowerCase().includes("url")) {
         console.log("🩹 [self-heal] Element verification failed, checking page state via URL...");
         try {
             const currentUrl = page.url();
-            
+
             // If verification mentioned error/failure, we should still be on same page
-            if (target.toLowerCase().includes("error") || target.toLowerCase().includes("message") || 
+            if (target.toLowerCase().includes("error") || target.toLowerCase().includes("message") ||
                 target.toLowerCase().includes("banner") || target.toLowerCase().includes("alert")) {
-                
+
                 // For error checks: being on the same page = test passed
                 if (currentUrl.includes("login") || currentUrl.includes("signin") || currentUrl === snapshot.url) {
                     return {
@@ -1223,11 +1296,11 @@ async function tryHeal(page, action, target, value, snapshot, previousFailure) {
                     };
                 }
             }
-            
+
             // For cart/badge/counter checks that fail: just verify we're still on the right page
-            if (target.toLowerCase().includes("cart") || target.toLowerCase().includes("badge") || 
+            if (target.toLowerCase().includes("cart") || target.toLowerCase().includes("badge") ||
                 target.toLowerCase().includes("number") || target.toLowerCase().includes("icon")) {
-                
+
                 // If we're on inventory/products page, the action probably succeeded
                 if (currentUrl.includes("inventory") || currentUrl.includes("products")) {
                     return {
@@ -1247,7 +1320,7 @@ async function tryHeal(page, action, target, value, snapshot, previousFailure) {
             console.log("🩹 [self-heal] URL fallback check failed");
         }
     }
-    
+
     // Original healing logic: try to find a different element
     const aiPick = await findElementWithAI(snapshot, action, target, value, { previousFailure });
 
@@ -1407,14 +1480,14 @@ app.post("/execute-tests", async (req, res) => {
 
                 // SUCCESS: Take screenshot with element highlighted
                 const fileName = `screenshots/${tc.testCaseId}.png`;
-                
+
                 // Highlight the last interacted element before screenshot
                 try {
                     await page.evaluate(() => {
                         // Remove any previous highlights
                         document.querySelectorAll('.testforge-highlight').forEach(el => el.remove());
                     });
-                    
+
                     // Add highlight overlay to last interacted element
                     const lastStep = stepLog[stepLog.length - 1];
                     if (lastStep && lastStep.status !== "fail" && lastStep.info) {
@@ -1423,12 +1496,12 @@ app.post("/execute-tests", async (req, res) => {
                             const elements = Array.from(document.querySelectorAll('*'));
                             const target = elements.find(el => {
                                 const text = el.textContent?.trim() || el.placeholder || el.value || '';
-                                return text.includes(labelText) || 
-                                       el.getAttribute('aria-label')?.includes(labelText) ||
-                                       el.id === labelText ||
-                                       el.name === labelText;
+                                return text.includes(labelText) ||
+                                    el.getAttribute('aria-label')?.includes(labelText) ||
+                                    el.id === labelText ||
+                                    el.name === labelText;
                             });
-                            
+
                             if (target) {
                                 const rect = target.getBoundingClientRect();
                                 const highlight = document.createElement('div');
@@ -1447,7 +1520,7 @@ app.post("/execute-tests", async (req, res) => {
                                     animation: testforge-pulse 1s ease-in-out;
                                 `;
                                 document.body.appendChild(highlight);
-                                
+
                                 // Add label
                                 const label = document.createElement('div');
                                 label.className = 'testforge-highlight';
@@ -1468,7 +1541,7 @@ app.post("/execute-tests", async (req, res) => {
                                     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
                                 `;
                                 document.body.appendChild(label);
-                                
+
                                 // Add animation
                                 if (!document.getElementById('testforge-styles')) {
                                     const style = document.createElement('style');
@@ -1483,16 +1556,16 @@ app.post("/execute-tests", async (req, res) => {
                                 }
                             }
                         }, lastStep.info);
-                        
+
                         // Wait for highlight to render
                         await page.waitForTimeout(300);
                     }
                 } catch (highlightErr) {
                     console.log("Could not add highlight overlay:", highlightErr.message);
                 }
-                
+
                 await page.screenshot({ path: fileName, fullPage: true });
-                
+
                 // Clean up highlights after screenshot
                 try {
                     await page.evaluate(() => {
@@ -1529,7 +1602,7 @@ app.post("/execute-tests", async (req, res) => {
                             await page.evaluate(() => {
                                 document.querySelectorAll('.testforge-highlight').forEach(el => el.remove());
                             });
-                            
+
                             await page.evaluate((stepDesc) => {
                                 // Try to find and highlight the failed element
                                 const style = document.createElement('style');
@@ -1543,7 +1616,7 @@ app.post("/execute-tests", async (req, res) => {
                                 if (!document.getElementById('testforge-styles')) {
                                     document.head.appendChild(style);
                                 }
-                                
+
                                 // Add error indicator overlay
                                 const overlay = document.createElement('div');
                                 overlay.className = 'testforge-highlight';
@@ -1569,13 +1642,13 @@ app.post("/execute-tests", async (req, res) => {
                                 `;
                                 document.body.appendChild(overlay);
                             }, failedStep.step);
-                            
+
                             await page.waitForTimeout(300);
                         }
-                        
+
                         await page.screenshot({ path: fileName, fullPage: true });
                         screenshotPath = `/screenshots/${tc.testCaseId}_error.png`;
-                        
+
                         await page.evaluate(() => {
                             document.querySelectorAll('.testforge-highlight').forEach(el => el.remove());
                         });
@@ -1912,369 +1985,362 @@ app.post("/export-report", async (req, res) => {
         }
 
         // ============ PDF EXPORT ============
-        // ============================================================
-// ENHANCED PDF EXPORT - Replace the PDF section in server.js
-// ============================================================
-// FIND THIS in server.js (around line 1940):
-// if (format === 'pdf') {
 
-// REPLACE THE ENTIRE PDF SECTION with this enhanced version:
+        if (format === 'pdf') {
+            const doc = new PDFDocument({
+                margin: 50,
+                size: 'A4',
+                bufferPages: true // Enable page buffering for header/footer
+            });
 
-if (format === 'pdf') {
-    const doc = new PDFDocument({ 
-        margin: 50, 
-        size: 'A4',
-        bufferPages: true // Enable page buffering for header/footer
-    });
-    
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}.pdf"`);
-    doc.pipe(res);
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}.pdf"`);
+            doc.pipe(res);
 
-    // ============================================================
-    // HELPER FUNCTIONS
-    // ============================================================
-    const addText = (text, options = {}) => {
-        doc.font(options.bold ? 'Helvetica-Bold' : 'Helvetica')
-           .fontSize(options.size || 12)
-           .fillColor(options.color || '#000000');
-        
-        if (options.x !== undefined && options.y !== undefined) {
-            doc.text(text, options.x, options.y, options.params || {});
-        } else {
-            doc.text(text, options.params || {});
-        }
-    };
+            // ============================================================
+            // HELPER FUNCTIONS
+            // ============================================================
+            const addText = (text, options = {}) => {
+                doc.font(options.bold ? 'Helvetica-Bold' : 'Helvetica')
+                    .fontSize(options.size || 12)
+                    .fillColor(options.color || '#000000');
 
-    const drawBox = (x, y, width, height, fillColor, strokeColor) => {
-        if (fillColor) {
-            doc.rect(x, y, width, height).fillAndStroke(fillColor, strokeColor || fillColor);
-        } else {
-            doc.rect(x, y, width, height).stroke(strokeColor || '#cccccc');
-        }
-    };
+                if (options.x !== undefined && options.y !== undefined) {
+                    doc.text(text, options.x, options.y, options.params || {});
+                } else {
+                    doc.text(text, options.params || {});
+                }
+            };
 
-    const addPageBorder = () => {
-        doc.rect(40, 40, doc.page.width - 80, doc.page.height - 80).stroke('#1e3c72');
-    };
+            const drawBox = (x, y, width, height, fillColor, strokeColor) => {
+                if (fillColor) {
+                    doc.rect(x, y, width, height).fillAndStroke(fillColor, strokeColor || fillColor);
+                } else {
+                    doc.rect(x, y, width, height).stroke(strokeColor || '#cccccc');
+                }
+            };
 
-    const addHeader = (pageNum) => {
-        const headerY = 40;
-        doc.fontSize(8)
-           .fillColor('#666666')
-           .text(`TestForge AI Report | ${execData.suiteName || 'Test Run'}`, 50, headerY, { align: 'left' })
-           .text(`Page ${pageNum}`, 50, headerY, { align: 'right' });
-        doc.moveTo(50, headerY + 15).lineTo(doc.page.width - 50, headerY + 15).stroke('#cccccc');
-    };
+            const addPageBorder = () => {
+                doc.rect(40, 40, doc.page.width - 80, doc.page.height - 80).stroke('#1e3c72');
+            };
 
-    const addFooter = (pageNum) => {
-        const footerY = doc.page.height - 60;
-        doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).stroke('#cccccc');
-        doc.fontSize(8)
-           .fillColor('#666666')
-           .text(`Generated by TestForge AI on ${new Date().toLocaleString()}`, 50, footerY + 10, { align: 'center' })
-           .text(`Confidential Test Report`, 50, footerY + 22, { align: 'center' });
-    };
+            const addHeader = (pageNum) => {
+                const headerY = 40;
+                doc.fontSize(8)
+                    .fillColor('#666666')
+                    .text(`TestForge AI Report | ${execData.suiteName || 'Test Run'}`, 50, headerY, { align: 'left' })
+                    .text(`Page ${pageNum}`, 50, headerY, { align: 'right' });
+                doc.moveTo(50, headerY + 15).lineTo(doc.page.width - 50, headerY + 15).stroke('#cccccc');
+            };
 
-    const addScreenshot = (screenshotPath, maxWidth = 200, maxHeight = 150) => {
-        if (!screenshotPath) return false;
-        
-        // Convert relative path to absolute
-        const fullPath = screenshotPath.startsWith('http') 
-            ? screenshotPath 
-            : path.join(__dirname, screenshotPath.replace(/^\//, ''));
-        
-        try {
-            if (fs.existsSync(fullPath)) {
-                // Check if we need a new page
-                if (doc.y + maxHeight > doc.page.height - 100) {
+            const addFooter = (pageNum) => {
+                const footerY = doc.page.height - 60;
+                doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).stroke('#cccccc');
+                doc.fontSize(8)
+                    .fillColor('#666666')
+                    .text(`Generated by TestForge AI on ${new Date().toLocaleString()}`, 50, footerY + 10, { align: 'center' })
+                    .text(`Confidential Test Report`, 50, footerY + 22, { align: 'center' });
+            };
+
+            const addScreenshot = (screenshotPath, maxWidth = 200, maxHeight = 150) => {
+                if (!screenshotPath) return false;
+
+                // Convert relative path to absolute
+                const fullPath = screenshotPath.startsWith('http')
+                    ? screenshotPath
+                    : path.join(__dirname, screenshotPath.replace(/^\//, ''));
+
+                try {
+                    if (fs.existsSync(fullPath)) {
+                        // Check if we need a new page
+                        if (doc.y + maxHeight > doc.page.height - 100) {
+                            doc.addPage();
+                        }
+
+                        doc.image(fullPath, {
+                            fit: [maxWidth, maxHeight],
+                            align: 'center'
+                        });
+                        doc.moveDown(0.5);
+                        return true;
+                    }
+                } catch (err) {
+                    console.log('Screenshot not found:', fullPath);
+                }
+                return false;
+            };
+
+            // ============================================================
+            // PAGE 1: TITLE & EXECUTIVE SUMMARY
+            // ============================================================
+            doc.fontSize(32)
+                .fillColor('#1e3c72')
+                .font('Helvetica-Bold')
+                .text('TestForge AI', { align: 'center' });
+
+            doc.fontSize(24)
+                .fillColor('#2a5298')
+                .text('Test Execution Report', { align: 'center' });
+
+            doc.moveDown(3);
+
+            // Decorative line
+            doc.moveTo(100, doc.y).lineTo(doc.page.width - 100, doc.y).lineWidth(2).stroke('#1e3c72');
+            doc.moveDown(2);
+
+            // Executive Summary Box
+            const summaryBoxY = doc.y;
+            const boxWidth = doc.page.width - 100;
+            const boxHeight = 200;
+
+            // Gradient-like effect with multiple rectangles
+            const gradientSteps = 5;
+            const stepHeight = boxHeight / gradientSteps;
+            for (let i = 0; i < gradientSteps; i++) {
+                const alpha = 0.95 - (i * 0.1);
+                const blue = Math.floor(240 + (i * 3));
+                doc.rect(50, summaryBoxY + (i * stepHeight), boxWidth, stepHeight)
+                    .fillOpacity(alpha)
+                    .fill(`rgb(${blue}, ${blue + 4}, ${blue + 8})`);
+            }
+            doc.fillOpacity(1);
+
+            // Border
+            doc.rect(50, summaryBoxY, boxWidth, boxHeight).lineWidth(2).stroke('#1e3c72');
+
+            // Summary Content
+            doc.fillColor('#1e3c72')
+                .fontSize(18)
+                .font('Helvetica-Bold')
+                .text('Executive Summary', 70, summaryBoxY + 20);
+
+            doc.fillColor('#000000')
+                .fontSize(12)
+                .font('Helvetica')
+                .text(`Suite Name: ${execData.suiteName || 'Test Run'}`, 70, summaryBoxY + 50)
+                .text(`Execution Date: ${timestamp.toLocaleString()}`, 70, summaryBoxY + 70)
+                .text(`Application URL: ${execData.appUrl || 'N/A'}`, 70, summaryBoxY + 90);
+
+            // Stats with icons
+            const statsY = summaryBoxY + 120;
+            doc.fontSize(11).font('Helvetica-Bold');
+            doc.text(`Total Tests: ${summary.total || 0}`, 70, statsY);
+            doc.fillColor('#4caf50').text(`Passed: ${summary.pass || 0}`, 220, statsY);
+            doc.fillColor('#f44336').text(`Failed: ${summary.fail || 0}`, 340, statsY);
+            doc.fillColor('#9c27b0').text(`Healed: ${summary.healed || 0}`, 460, statsY);
+
+            // Pass Rate with visual indicator
+            const passRate = summary.passRate || 0;
+            const passColor = passRate >= 80 ? '#4caf50' : passRate >= 60 ? '#ff9800' : '#f44336';
+
+            doc.fillColor('#000000').fontSize(12).font('Helvetica');
+            doc.text('Pass Rate:', 70, statsY + 30);
+
+            // Progress bar
+            const barX = 150;
+            const barY = statsY + 28;
+            const barWidth = 300;
+            const barHeight = 20;
+
+            doc.rect(barX, barY, barWidth, barHeight).stroke('#cccccc');
+            doc.rect(barX, barY, (barWidth * passRate / 100), barHeight).fill(passColor);
+
+            doc.fillColor('#ffffff')
+                .fontSize(11)
+                .font('Helvetica-Bold')
+                .text(`${passRate}%`, barX + (barWidth / 2) - 15, barY + 4);
+
+            // Status Badge
+            doc.addPage();
+
+            // ============================================================
+            // PAGE 2+: DETAILED TEST RESULTS
+            // ============================================================
+            addHeader(2);
+
+            doc.fontSize(20)
+                .fillColor('#1e3c72')
+                .font('Helvetica-Bold')
+                .text('Detailed Test Results', 50, 80);
+
+            doc.moveDown(2);
+
+            // Test results
+            results.forEach((r, index) => {
+                // Check if we need a new page (accounting for screenshot space)
+                const estimatedHeight = r.screenshot ? 280 : 120;
+                if (doc.y + estimatedHeight > doc.page.height - 100) {
                     doc.addPage();
+                    addHeader(Math.floor((index + 3) / 5) + 2);
+                    doc.moveDown(2);
                 }
 
-                doc.image(fullPath, {
-                    fit: [maxWidth, maxHeight],
-                    align: 'center'
-                });
-                doc.moveDown(0.5);
-                return true;
-            }
-        } catch (err) {
-            console.log('Screenshot not found:', fullPath);
-        }
-        return false;
-    };
+                const startY = doc.y;
+                const cardHeight = r.screenshot ? 260 : 100; // Screenshots now shown for all tests
+                const statusColor = r.status === 'Pass' ? '#4caf50' : r.status === 'Fail' ? '#f44336' : '#9e9e9e';
 
-    // ============================================================
-    // PAGE 1: TITLE & EXECUTIVE SUMMARY
-    // ============================================================
-    doc.fontSize(32)
-       .fillColor('#1e3c72')
-       .font('Helvetica-Bold')
-       .text('TestForge AI', { align: 'center' });
-    
-    doc.fontSize(24)
-       .fillColor('#2a5298')
-       .text('Test Execution Report', { align: 'center' });
-    
-    doc.moveDown(3);
+                // Card background with shadow effect
+                doc.rect(55, startY + 5, 490, cardHeight).fill('#f5f5f5');
+                doc.rect(50, startY, 490, cardHeight).fill('#ffffff').stroke('#e0e0e0');
 
-    // Decorative line
-    doc.moveTo(100, doc.y).lineTo(doc.page.width - 100, doc.y).lineWidth(2).stroke('#1e3c72');
-    doc.moveDown(2);
+                // Status badge (FIXED: Shifted 60px left to avoid overlap)
+                const badgeWidth = 80;
+                const badgeX = doc.page.width - 110 - badgeWidth; // Moved left from -50 to -110
+                doc.rect(badgeX, startY + 10, badgeWidth, 25)
+                    .fill(statusColor);
+                doc.fillColor('#ffffff')
+                    .fontSize(11)
+                    .font('Helvetica-Bold')
+                    .text(r.status || 'Unknown', badgeX, startY + 16, { width: badgeWidth, align: 'center' });
 
-    // Executive Summary Box
-    const summaryBoxY = doc.y;
-    const boxWidth = doc.page.width - 100;
-    const boxHeight = 200;
-    
-    // Gradient-like effect with multiple rectangles
-    const gradientSteps = 5;
-    const stepHeight = boxHeight / gradientSteps;
-    for (let i = 0; i < gradientSteps; i++) {
-        const alpha = 0.95 - (i * 0.1);
-        const blue = Math.floor(240 + (i * 3));
-        doc.rect(50, summaryBoxY + (i * stepHeight), boxWidth, stepHeight)
-           .fillOpacity(alpha)
-           .fill(`rgb(${blue}, ${blue + 4}, ${blue + 8})`);
-    }
-    doc.fillOpacity(1);
-    
-    // Border
-    doc.rect(50, summaryBoxY, boxWidth, boxHeight).lineWidth(2).stroke('#1e3c72');
+                // Test ID
+                doc.fillColor('#1e3c72')
+                    .fontSize(12)
+                    .font('Helvetica-Bold')
+                    .text(`${r.testCaseId || `Test ${index + 1}`}`, 60, startY + 15);
 
-    // Summary Content
-    doc.fillColor('#1e3c72')
-       .fontSize(18)
-       .font('Helvetica-Bold')
-       .text('Executive Summary', 70, summaryBoxY + 20);
+                // Title
+                doc.fillColor('#000000')
+                    .fontSize(11)
+                    .font('Helvetica')
+                    .text(r.title || 'No title', 60, startY + 40, { width: 480 });
 
-    doc.fillColor('#000000')
-       .fontSize(12)
-       .font('Helvetica')
-       .text(`Suite Name: ${execData.suiteName || 'Test Run'}`, 70, summaryBoxY + 50)
-       .text(`Execution Date: ${timestamp.toLocaleString()}`, 70, summaryBoxY + 70)
-       .text(`Application URL: ${execData.appUrl || 'N/A'}`, 70, summaryBoxY + 90);
+                // Error message (if failed)
+                if (r.status === 'Fail' && r.error) {
+                    doc.fillColor('#f44336')
+                        .fontSize(10)
+                        .font('Helvetica')
+                        .text(`Error: ${r.error.substring(0, 150)}${r.error.length > 150 ? '...' : ''}`,
+                            60, startY + 65, { width: 480 });
+                }
 
-    // Stats with icons
-    const statsY = summaryBoxY + 120;
-    doc.fontSize(11).font('Helvetica-Bold');
-    doc.text(`Total Tests: ${summary.total || 0}`, 70, statsY);
-    doc.fillColor('#4caf50').text(`Passed: ${summary.pass || 0}`, 220, statsY);
-    doc.fillColor('#f44336').text(`Failed: ${summary.fail || 0}`, 340, statsY);
-    doc.fillColor('#9c27b0').text(`Healed: ${summary.healed || 0}`, 460, statsY);
+                // Healed indicator
+                if (r.healed) {
+                    doc.fillColor('#9c27b0')
+                        .fontSize(10)
+                        .font('Helvetica-Bold')
+                        .text('🔧 Self-Healed', 60, r.status === 'Fail' ? startY + 90 : startY + 65);
+                }
 
-    // Pass Rate with visual indicator
-    const passRate = summary.passRate || 0;
-    const passColor = passRate >= 80 ? '#4caf50' : passRate >= 60 ? '#ff9800' : '#f44336';
-    
-    doc.fillColor('#000000').fontSize(12).font('Helvetica');
-    doc.text('Pass Rate:', 70, statsY + 30);
-    
-    // Progress bar
-    const barX = 150;
-    const barY = statsY + 28;
-    const barWidth = 300;
-    const barHeight = 20;
-    
-    doc.rect(barX, barY, barWidth, barHeight).stroke('#cccccc');
-    doc.rect(barX, barY, (barWidth * passRate / 100), barHeight).fill(passColor);
-    
-    doc.fillColor('#ffffff')
-       .fontSize(11)
-       .font('Helvetica-Bold')
-       .text(`${passRate}%`, barX + (barWidth / 2) - 15, barY + 4);
+                // Screenshot (FIXED: Now shows for ALL tests - Pass, Fail, and Healed)
+                if (r.screenshot) {
+                    doc.moveDown(0.5);
+                    const screenshotY = doc.y;
+                    doc.fillColor('#666666')
+                        .fontSize(9)
+                        .font('Helvetica')
+                        .text('Screenshot:', 60, screenshotY);
 
-    // Status Badge
-    doc.addPage();
+                    doc.y = screenshotY + 15;
 
-    // ============================================================
-    // PAGE 2+: DETAILED TEST RESULTS
-    // ============================================================
-    addHeader(2);
-    
-    doc.fontSize(20)
-       .fillColor('#1e3c72')
-       .font('Helvetica-Bold')
-       .text('Detailed Test Results', 50, 80);
-    
-    doc.moveDown(2);
+                    // Add border around screenshot area
+                    const imgStartY = doc.y;
+                    const screenshotAdded = addScreenshot(r.screenshot, 470, 150);
 
-    // Test results
-    results.forEach((r, index) => {
-        // Check if we need a new page (accounting for screenshot space)
-        const estimatedHeight = r.screenshot ? 280 : 120;
-        if (doc.y + estimatedHeight > doc.page.height - 100) {
+                    if (screenshotAdded) {
+                        doc.rect(55, imgStartY - 5, 480, 160).stroke('#cccccc');
+                    }
+                }
+
+                doc.y = startY + cardHeight + 15;
+            });
+
+            // ============================================================
+            // FINAL PAGE: SUMMARY & RECOMMENDATIONS
+            // ============================================================
             doc.addPage();
-            addHeader(Math.floor((index + 3) / 5) + 2);
+            addHeader(Math.ceil(results.length / 5) + 2);
+
+            doc.fontSize(20)
+                .fillColor('#1e3c72')
+                .font('Helvetica-Bold')
+                .text('Test Summary', 50, 80);
+
             doc.moveDown(2);
-        }
 
-        const startY = doc.y;
-        const cardHeight = r.screenshot ? 260 : 100; // Screenshots now shown for all tests
-        const statusColor = r.status === 'Pass' ? '#4caf50' : r.status === 'Fail' ? '#f44336' : '#9e9e9e';
+            // Failed tests summary
+            const failedTests = results.filter(r => r.status === 'Fail');
+            if (failedTests.length > 0) {
+                doc.fontSize(14)
+                    .fillColor('#f44336')
+                    .font('Helvetica-Bold')
+                    .text(`❌ Failed Tests (${failedTests.length})`, 60, doc.y);
 
-        // Card background with shadow effect
-        doc.rect(55, startY + 5, 490, cardHeight).fill('#f5f5f5');
-        doc.rect(50, startY, 490, cardHeight).fill('#ffffff').stroke('#e0e0e0');
+                doc.moveDown(1);
 
-        // Status badge (FIXED: Shifted 60px left to avoid overlap)
-        const badgeWidth = 80;
-        const badgeX = doc.page.width - 110 - badgeWidth; // Moved left from -50 to -110
-        doc.rect(badgeX, startY + 10, badgeWidth, 25)
-           .fill(statusColor);
-        doc.fillColor('#ffffff')
-           .fontSize(11)
-           .font('Helvetica-Bold')
-           .text(r.status || 'Unknown', badgeX, startY + 16, { width: badgeWidth, align: 'center' });
-
-        // Test ID
-        doc.fillColor('#1e3c72')
-           .fontSize(12)
-           .font('Helvetica-Bold')
-           .text(`${r.testCaseId || `Test ${index + 1}`}`, 60, startY + 15);
-
-        // Title
-        doc.fillColor('#000000')
-           .fontSize(11)
-           .font('Helvetica')
-           .text(r.title || 'No title', 60, startY + 40, { width: 480 });
-
-        // Error message (if failed)
-        if (r.status === 'Fail' && r.error) {
-            doc.fillColor('#f44336')
-               .fontSize(10)
-               .font('Helvetica')
-               .text(`Error: ${r.error.substring(0, 150)}${r.error.length > 150 ? '...' : ''}`, 
-                     60, startY + 65, { width: 480 });
-        }
-
-        // Healed indicator
-        if (r.healed) {
-            doc.fillColor('#9c27b0')
-               .fontSize(10)
-               .font('Helvetica-Bold')
-               .text('🔧 Self-Healed', 60, r.status === 'Fail' ? startY + 90 : startY + 65);
-        }
-
-        // Screenshot (FIXED: Now shows for ALL tests - Pass, Fail, and Healed)
-        if (r.screenshot) {
-            doc.moveDown(0.5);
-            const screenshotY = doc.y;
-            doc.fillColor('#666666')
-               .fontSize(9)
-               .font('Helvetica')
-               .text('Screenshot:', 60, screenshotY);
-            
-            doc.y = screenshotY + 15;
-            
-            // Add border around screenshot area
-            const imgStartY = doc.y;
-            const screenshotAdded = addScreenshot(r.screenshot, 470, 150);
-            
-            if (screenshotAdded) {
-                doc.rect(55, imgStartY - 5, 480, 160).stroke('#cccccc');
+                failedTests.forEach((r, i) => {
+                    doc.fontSize(10)
+                        .fillColor('#000000')
+                        .font('Helvetica')
+                        .text(`${i + 1}. ${r.testCaseId} - ${r.title}`, 70, doc.y);
+                    doc.moveDown(0.3);
+                });
             }
-        }
 
-        doc.y = startY + cardHeight + 15;
-    });
+            // Healed tests summary
+            const healedTests = results.filter(r => r.healed);
+            if (healedTests.length > 0) {
+                doc.moveDown(2);
+                doc.fontSize(14)
+                    .fillColor('#9c27b0')
+                    .font('Helvetica-Bold')
+                    .text(`🔧 Self-Healed Tests (${healedTests.length})`, 60, doc.y);
 
-    // ============================================================
-    // FINAL PAGE: SUMMARY & RECOMMENDATIONS
-    // ============================================================
-    doc.addPage();
-    addHeader(Math.ceil(results.length / 5) + 2);
+                doc.moveDown(1);
 
-    doc.fontSize(20)
-       .fillColor('#1e3c72')
-       .font('Helvetica-Bold')
-       .text('Test Summary', 50, 80);
-    
-    doc.moveDown(2);
+                healedTests.forEach((r, i) => {
+                    doc.fontSize(10)
+                        .fillColor('#000000')
+                        .font('Helvetica')
+                        .text(`${i + 1}. ${r.testCaseId} - ${r.title}`, 70, doc.y);
+                    doc.moveDown(0.3);
+                });
+            }
 
-    // Failed tests summary
-    const failedTests = results.filter(r => r.status === 'Fail');
-    if (failedTests.length > 0) {
-        doc.fontSize(14)
-           .fillColor('#f44336')
-           .font('Helvetica-Bold')
-           .text(`❌ Failed Tests (${failedTests.length})`, 60, doc.y);
-        
-        doc.moveDown(1);
-        
-        failedTests.forEach((r, i) => {
+            // Recommendations
+            doc.moveDown(2);
+            doc.fontSize(14)
+                .fillColor('#1e3c72')
+                .font('Helvetica-Bold')
+                .text('Recommendations', 60, doc.y);
+
+            doc.moveDown(1);
             doc.fontSize(10)
-               .fillColor('#000000')
-               .font('Helvetica')
-               .text(`${i + 1}. ${r.testCaseId} - ${r.title}`, 70, doc.y);
-            doc.moveDown(0.3);
-        });
-    }
+                .fillColor('#000000')
+                .font('Helvetica');
 
-    // Healed tests summary
-    const healedTests = results.filter(r => r.healed);
-    if (healedTests.length > 0) {
-        doc.moveDown(2);
-        doc.fontSize(14)
-           .fillColor('#9c27b0')
-           .font('Helvetica-Bold')
-           .text(`🔧 Self-Healed Tests (${healedTests.length})`, 60, doc.y);
-        
-        doc.moveDown(1);
-        
-        healedTests.forEach((r, i) => {
-            doc.fontSize(10)
-               .fillColor('#000000')
-               .font('Helvetica')
-               .text(`${i + 1}. ${r.testCaseId} - ${r.title}`, 70, doc.y);
-            doc.moveDown(0.3);
-        });
-    }
+            if (passRate < 60) {
+                doc.text('• Critical: Pass rate below 60%. Immediate attention required.', 70, doc.y);
+                doc.moveDown(0.5);
+                doc.text('• Review failed test screenshots and error logs.', 70, doc.y);
+                doc.moveDown(0.5);
+                doc.text('• Consider regression testing before production deployment.', 70, doc.y);
+            } else if (passRate < 80) {
+                doc.text('• Warning: Pass rate below 80%. Investigation recommended.', 70, doc.y);
+                doc.moveDown(0.5);
+                doc.text('• Review failed tests and determine if fixes are needed.', 70, doc.y);
+            } else {
+                doc.text('• Good: Pass rate above 80%. Tests are generally healthy.', 70, doc.y);
+                doc.moveDown(0.5);
+                doc.text('• Monitor failed tests and address any critical issues.', 70, doc.y);
+            }
 
-    // Recommendations
-    doc.moveDown(2);
-    doc.fontSize(14)
-       .fillColor('#1e3c72')
-       .font('Helvetica-Bold')
-       .text('Recommendations', 60, doc.y);
-    
-    doc.moveDown(1);
-    doc.fontSize(10)
-       .fillColor('#000000')
-       .font('Helvetica');
+            if (healedTests.length > 0) {
+                doc.moveDown(0.5);
+                doc.text(`• Note: ${healedTests.length} test(s) self-healed. Review healing strategies.`, 70, doc.y);
+            }
 
-    if (passRate < 60) {
-        doc.text('• Critical: Pass rate below 60%. Immediate attention required.', 70, doc.y);
-        doc.moveDown(0.5);
-        doc.text('• Review failed test screenshots and error logs.', 70, doc.y);
-        doc.moveDown(0.5);
-        doc.text('• Consider regression testing before production deployment.', 70, doc.y);
-    } else if (passRate < 80) {
-        doc.text('• Warning: Pass rate below 80%. Investigation recommended.', 70, doc.y);
-        doc.moveDown(0.5);
-        doc.text('• Review failed tests and determine if fixes are needed.', 70, doc.y);
-    } else {
-        doc.text('• Good: Pass rate above 80%. Tests are generally healthy.', 70, doc.y);
-        doc.moveDown(0.5);
-        doc.text('• Monitor failed tests and address any critical issues.', 70, doc.y);
-    }
+            // Add footers to all pages
+            const range = doc.bufferedPageRange();
+            for (let i = 0; i < range.count; i++) {
+                doc.switchToPage(i);
+                if (i > 0) { // Skip title page
+                    addFooter(i + 1);
+                }
+            }
 
-    if (healedTests.length > 0) {
-        doc.moveDown(0.5);
-        doc.text(`• Note: ${healedTests.length} test(s) self-healed. Review healing strategies.`, 70, doc.y);
-    }
-
-    // Add footers to all pages
-    const range = doc.bufferedPageRange();
-    for (let i = 0; i < range.count; i++) {
-        doc.switchToPage(i);
-        if (i > 0) { // Skip title page
-            addFooter(i + 1);
+            doc.end();
         }
-    }
-
-    doc.end();
-}
 
     } catch (err) {
         console.error("❌ Export error:", err);

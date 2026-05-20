@@ -69,6 +69,11 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
+// REFACTORED COMPONENTS - Import extracted components
+import { EditableCell } from './components/common/EditableCell';
+import { SectionHeader } from './components/common/SectionHeader';
+import { TestCaseSkeleton } from './components/common/TestCaseSkeleton';
+
 const API = "http://localhost:5000";
 
 function App() {
@@ -455,9 +460,8 @@ function App() {
     setRequirement("");
   };
 
-  // ===========================================================
-  // CONVERSATIONAL REFINEMENT
-  // ===========================================================
+  // REFINE WITH AI - BATCH PROCESSING SUPPORT //
+
   const sendChatMessage = async () => {
     if (!chatInput.trim()) return;
 
@@ -467,64 +471,145 @@ function App() {
     setRefining(true);
 
     try {
-      // Extract test case ID from message (e.g., "TC_005")
-      const tcMatch = userMsg.match(/TC_\d+/i);
-      if (!tcMatch) {
+      // Extract ALL test case IDs from message (supports multiple)
+      const tcMatches = userMsg.match(/TC_\d+/gi);
+
+      if (!tcMatches || tcMatches.length === 0) {
         setChatMessages((prev) => [...prev, {
           role: "assistant",
-          text: "Please mention a test case ID (e.g., TC_005) so I know which test to refine."
+          text: "Please mention at least one test case ID (e.g., TC_005) so I know which test(s) to refine."
         }]);
         setRefining(false);
         return;
       }
 
-      const tcId = tcMatch[0].toUpperCase();
-      const testCase = testcases.find((tc) => tc.testCaseId === tcId);
+      // ====== SINGLE TEST CASE MODE ======
+      if (tcMatches.length === 1) {
+        const tcId = tcMatches[0].toUpperCase();
+        const testCase = testcases.find((tc) => tc.testCaseId === tcId);
 
-      if (!testCase) {
+        if (!testCase) {
+          setChatMessages((prev) => [...prev, {
+            role: "assistant",
+            text: `Test case ${tcId} not found. Available test cases: ${testcases.map(t => t.testCaseId).join(", ")}`
+          }]);
+          setRefining(false);
+          return;
+        }
+
+        const res = await fetch(`${API}/refine-testcase`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ testCase, userMessage: userMsg }),
+        });
+
+        const data = await res.json();
+
+        if (data.updatedTestCase) {
+          // Update the test case in the array
+          setTestcases(prev => prev.map(tc =>
+            tc.testCaseId === tcId ? data.updatedTestCase : tc
+          ));
+
+          // Mark as edited
+          setEditedIds((prev) => new Set(prev).add(tcId));
+
+          setChatMessages((prev) => [...prev, {
+            role: "assistant",
+            text: `✅ ${tcId} has been updated successfully!`
+          }]);
+        } else {
+          throw new Error(data.error || "Failed to refine test case");
+        }
+      }
+      // ====== BATCH/MULTIPLE TEST CASES MODE ======
+      else {
+        const uniqueTcIds = [...new Set(tcMatches.map(id => id.toUpperCase()))];
+        const results = [];
+        const errors = [];
+
+        // Create a working copy that accumulates changes
+        let updatedTestcases = [...testcases];
+        const newEditedIds = new Set(editedIds);
+
+        // Process each test case sequentially
+        for (const tcId of uniqueTcIds) {
+          const testCase = updatedTestcases.find((tc) => tc.testCaseId === tcId);
+
+          if (!testCase) {
+            errors.push(`${tcId} not found`);
+            continue;
+          }
+
+          try {
+            // Extract the specific instruction for THIS test case
+            const pattern = new RegExp(`${tcId}\\s+([^\\n]*?)(?=TC_\\d+|$)`, 'i');
+            const match = userMsg.match(pattern);
+            const specificInstruction = match ? match[1].trim() : userMsg;
+
+            const res = await fetch(`${API}/refine-testcase`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                testCase,
+                userMessage: `${tcId} ${specificInstruction}`
+              }),
+            });
+
+            const data = await res.json();
+
+            if (data.updatedTestCase) {
+              // Update in the working copy (not the original state)
+              const idx = updatedTestcases.findIndex((tc) => tc.testCaseId === tcId);
+              if (idx !== -1) {
+                updatedTestcases[idx] = data.updatedTestCase;
+              }
+
+              // Add to edited IDs
+              newEditedIds.add(tcId);
+
+              results.push(tcId);
+            } else {
+              errors.push(`${tcId}: ${data.error || 'Failed'}`);
+            }
+          } catch (err) {
+            errors.push(`${tcId}: ${err.message}`);
+          }
+        }
+
+        // Update state ONCE with all accumulated changes
+        if (results.length > 0) {
+          setTestcases(updatedTestcases);
+          setEditedIds(newEditedIds);
+        }
+
+        // Build response message
+        let responseText = "";
+        if (results.length > 0) {
+          responseText += `✅ Successfully updated: ${results.join(", ")}\n`;
+          responseText += `💡 Changes are now visible in the test cases!`;
+        }
+        if (errors.length > 0) {
+          responseText += `\n❌ Errors: ${errors.join("; ")}`;
+        }
+
         setChatMessages((prev) => [...prev, {
           role: "assistant",
-          text: `Test case ${tcId} not found. Available test cases: ${testcases.map(t => t.testCaseId).join(", ")}`
+          text: responseText || "No test cases were updated."
         }]);
-        setRefining(false);
-        return;
       }
 
-      const res = await fetch(`${API}/refine-testcase`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ testCase, userMessage: userMsg }),
-      });
-
-      const data = await res.json();
-
-      if (data.updatedTestCase) {
-        // Update test case in state
-        setTestcases((prev) =>
-          prev.map((tc) => tc.testCaseId === tcId ? data.updatedTestCase : tc)
-        );
-        setEditedIds((prev) => new Set(prev).add(tcId));
-
-        setChatMessages((prev) => [...prev, {
-          role: "assistant",
-          text: `✅ Updated ${tcId}! Check the test cases table to see the changes.`
-        }]);
-      } else {
-        setChatMessages((prev) => [...prev, {
-          role: "assistant",
-          text: "Sorry, I couldn't update the test case. Please try rephrasing your request."
-        }]);
-      }
-    } catch (err) {
-      console.error(err);
+    } catch (error) {
+      console.error("Refine error:", error);
       setChatMessages((prev) => [...prev, {
         role: "assistant",
-        text: "Error: " + err.message
+        text: `❌ Error: ${error.message}`
       }]);
+    } finally {
+      setRefining(false);
     }
-
-    setRefining(false);
   };
+
 
   // ===========================================================
   // BUG REPORT GENERATION
@@ -755,7 +840,7 @@ function App() {
       originalValue = originalTC[field] || "";
     }
 
-    // ✅ FIX: Only update if value actually changed
+    //  Only update if value actually changed
     if (valueToSave === originalValue) {
       // No change - just close the editor without updating
       setEditingCell(null);
@@ -786,7 +871,7 @@ function App() {
       })
     );
 
-    // ✅ FIX: Only add to editedIds if value actually changed
+    // Only add to editedIds if value actually changed
     setEditedIds((prev) => new Set(prev).add(tcId));
     setEditingCell(null);
     setEditValue("");
@@ -1087,10 +1172,6 @@ function App() {
   // ============================================================
   // LOADING SKELETON COMPONENT
   // ============================================================
-  // ============================================================
-  // IMPROVED LOADING SKELETON COMPONENT (Table-like)
-  // ============================================================
-  // REPLACE the existing TestCaseSkeleton component in App.js with this:
 
   const TestCaseSkeleton = () => (
     <Box mt={3}>
@@ -1200,66 +1281,6 @@ function App() {
     </Box>
   );
 
-
-  const EditableCell = ({ tcId, field, value, multiline = false, stepIdx }) => {
-    const inputRef = React.useRef(null);
-    
-    const isEditing = editingCell &&
-      editingCell.tcId === tcId &&
-      editingCell.field === field &&
-      editingCell.stepIdx === stepIdx;
-
-    // ✅ Handle save - pass value directly to avoid stale state
-    const handleSave = () => {
-      if (!inputRef.current) return;
-      const finalValue = inputRef.current.value || "";
-      saveEdit(finalValue);  // ✅ Pass value directly
-    };
-
-    if (isEditing) {
-      return (
-        <TextField
-          inputRef={inputRef}
-          autoFocus
-          fullWidth
-          multiline={multiline}
-          minRows={multiline ? 3 : 1}
-          defaultValue={editValue}
-          onBlur={handleSave}  // ✅ Simplified
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !multiline) { 
-              e.preventDefault();
-              handleSave();
-            }
-            if (e.key === "Escape") cancelEdit();
-            if (e.key === "Enter" && multiline && (e.ctrlKey || e.metaKey)) {
-              handleSave();
-            }
-          }}
-          size="small"
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              background: "rgba(255,255,255,0.95)",
-              color: "#222",
-              fontSize: "13px",
-            },
-          }}
-        />
-      );
-    }
-
-    return (
-      <Box
-        onClick={() => startEdit(tcId, field, stepIdx, value)}
-        sx={{
-          minHeight: 24, padding: "4px 6px", borderRadius: "6px",
-          "&:hover": { background: "rgba(255,255,255,0.15)", outline: "1px dashed rgba(255,255,255,0.4)" },
-        }}
-      >
-        {value || <span style={{ color: "rgba(255,255,255,0.4)", fontStyle: "italic" }}>Click to edit…</span>}
-      </Box>
-    );
-  };
 
   // ===========================================================
   // EXPORT MENU COMPONENT (FIXED)
@@ -1779,7 +1800,17 @@ function App() {
                                       {isEdited && <MuiTooltip title="Edited"><EditIcon sx={{ fontSize: 14, ml: 0.5, color: "#ffc107", verticalAlign: "middle" }} /></MuiTooltip>}
                                     </td>
                                     <td style={editableTdStyle}>
-                                      <EditableCell tcId={tc.testCaseId} field="title" value={tc.title} multiline />
+                                      <EditableCell
+                                        tcId={tc.testCaseId}
+                                        field="title"
+                                        value={tc.title}
+                                        multiline
+                                        editingCell={editingCell}
+                                        editValue={editValue}
+                                        onStartEdit={startEdit}
+                                        onSave={saveEdit}
+                                        onCancel={cancelEdit}
+                                      />
                                     </td>
                                     <td style={editableTdStyle}>
                                       <EditableCell
@@ -1787,13 +1818,37 @@ function App() {
                                         field="testStepsAll"
                                         value={Array.isArray(tc.testSteps) ? tc.testSteps.join("\n") : (tc.testSteps || "")}
                                         multiline
+                                        editingCell={editingCell}
+                                        editValue={editValue}
+                                        onStartEdit={startEdit}
+                                        onSave={saveEdit}
+                                        onCancel={cancelEdit}
                                       />
                                     </td>
                                     <td style={editableTdStyle}>
-                                      <EditableCell tcId={tc.testCaseId} field="expectedResult" value={tc.expectedResult} multiline />
+                                      <EditableCell
+                                        tcId={tc.testCaseId}
+                                        field="expectedResult"
+                                        value={tc.expectedResult}
+                                        multiline
+                                        editingCell={editingCell}
+                                        editValue={editValue}
+                                        onStartEdit={startEdit}
+                                        onSave={saveEdit}
+                                        onCancel={cancelEdit}
+                                      />
                                     </td>
                                     <td style={editableTdStyle}>
-                                      <EditableCell tcId={tc.testCaseId} field="priority" value={tc.priority} />
+                                      <EditableCell
+                                        tcId={tc.testCaseId}
+                                        field="priority"
+                                        value={tc.priority}
+                                        editingCell={editingCell}
+                                        editValue={editValue}
+                                        onStartEdit={startEdit}
+                                        onSave={saveEdit}
+                                        onCancel={cancelEdit}
+                                      />
                                     </td>
                                     <td style={tdStyle}>
                                       {isEdited && (
